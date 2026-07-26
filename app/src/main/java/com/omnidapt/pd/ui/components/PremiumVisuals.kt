@@ -7,6 +7,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -29,6 +30,8 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.IconButtonColors
 import androidx.compose.material3.IconButtonDefaults
+import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.ProvideTextStyle
 import androidx.compose.material3.Button as MaterialButton
 import androidx.compose.material3.IconButton as MaterialIconButton
 import androidx.compose.material3.OutlinedButton as MaterialOutlinedButton
@@ -50,6 +53,8 @@ import com.omnidapt.pd.ui.motion.omniPressEffect
 import com.omnidapt.pd.ui.theme.AuraBlue
 import com.omnidapt.pd.ui.theme.AuraCyan
 import com.omnidapt.pd.ui.theme.AuraIndigo
+import com.omnidapt.pd.ui.theme.BrandBlue
+import com.omnidapt.pd.ui.theme.DeepBlue
 import com.omnidapt.pd.ui.theme.PremiumBorder
 import com.omnidapt.pd.ui.theme.PremiumSurface
 
@@ -66,14 +71,14 @@ fun AmbientBackdrop(
     content: @Composable BoxScope.() -> Unit
 ) {
     val baseColors = when (style) {
-        AmbientStyle.Login -> listOf(Color(0xFFF8FBFF), Color(0xFFF0F6FF), Color(0xFFF8FAFE))
-        AmbientStyle.Patient -> listOf(Color(0xFFFBFDFF), Color(0xFFF2F8FF), Color(0xFFF8FAFE))
-        AmbientStyle.Doctor -> listOf(Color(0xFFF8FAFE), Color(0xFFF0F5FC), Color(0xFFF7F9FD))
+        AmbientStyle.Login -> listOf(Color(0xFFF9FCFF), Color(0xFFEAF4FF), Color(0xFFF6F4FF))
+        AmbientStyle.Patient -> listOf(Color(0xFFFBFDFF), Color(0xFFEDF7FF), Color(0xFFF7F5FF))
+        AmbientStyle.Doctor -> listOf(Color(0xFFF8FBFF), Color(0xFFEDF3FD), Color(0xFFF4F2FC))
     }
     val opacity = when (style) {
-        AmbientStyle.Login -> 0.13f
-        AmbientStyle.Patient -> 0.11f
-        AmbientStyle.Doctor -> 0.075f
+        AmbientStyle.Login -> 0.22f
+        AmbientStyle.Patient -> 0.18f
+        AmbientStyle.Doctor -> 0.13f
     }
 
     Box(
@@ -84,6 +89,10 @@ fun AmbientBackdrop(
                 .fillMaxSize()
                 .semantics { hideFromAccessibility() }
         ) {
+            FlowingLightVeil(
+                opacity = opacity * 0.72f,
+                durationMillis = OmniMotion.AmbientMediumMillis
+            )
             GlowOrb(
                 color = AuraBlue,
                 opacity = opacity,
@@ -113,6 +122,58 @@ fun AmbientBackdrop(
             )
         }
         content()
+    }
+}
+
+@Composable
+private fun BoxScope.FlowingLightVeil(
+    opacity: Float,
+    durationMillis: Int
+) {
+    val transition = rememberInfiniteTransition(label = "flowingLightVeil")
+    val driftX by transition.animateFloat(
+        initialValue = -46f,
+        targetValue = 46f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "flowingLightVeilX"
+    )
+    val driftY by transition.animateFloat(
+        initialValue = -24f,
+        targetValue = 34f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis + 4_000),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "flowingLightVeilY"
+    )
+    Canvas(
+        modifier = Modifier
+            .fillMaxSize()
+            .graphicsLayer {
+                translationX = driftX.dp.toPx()
+                translationY = driftY.dp.toPx()
+                scaleX = 1.16f
+                scaleY = 1.16f
+                rotationZ = -3.5f
+            }
+    ) {
+        drawRect(
+            brush = Brush.linearGradient(
+                colorStops = arrayOf(
+                    0f to Color.Transparent,
+                    0.22f to AuraBlue.copy(alpha = opacity * 0.3f),
+                    0.43f to AuraCyan.copy(alpha = opacity),
+                    0.62f to AuraIndigo.copy(alpha = opacity * 0.74f),
+                    0.82f to AuraBlue.copy(alpha = opacity * 0.25f),
+                    1f to Color.Transparent
+                ),
+                start = androidx.compose.ui.geometry.Offset(0f, size.height * 0.12f),
+                end = androidx.compose.ui.geometry.Offset(size.width, size.height * 0.88f)
+            )
+        )
     }
 }
 
@@ -206,8 +267,19 @@ fun OmniButton(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     shape: Shape = RoundedCornerShape(14.dp),
-    colors: ButtonColors = ButtonDefaults.buttonColors(),
-    elevation: ButtonElevation? = ButtonDefaults.buttonElevation(),
+    colors: ButtonColors = ButtonDefaults.buttonColors(
+        containerColor = BrandBlue,
+        contentColor = Color.White,
+        disabledContainerColor = BrandBlue.copy(alpha = 0.12f),
+        disabledContentColor = DeepBlue.copy(alpha = 0.38f)
+    ),
+    elevation: ButtonElevation? = ButtonDefaults.buttonElevation(
+        defaultElevation = 2.dp,
+        pressedElevation = 0.dp,
+        focusedElevation = 2.dp,
+        hoveredElevation = 3.dp,
+        disabledElevation = 0.dp
+    ),
     border: BorderStroke? = null,
     contentPadding: PaddingValues = ButtonDefaults.ContentPadding,
     interactionSource: MutableInteractionSource? = null,
@@ -218,7 +290,7 @@ fun OmniButton(
         onClick = onClick,
         modifier = modifier
             .heightIn(min = 40.dp)
-            .omniPressEffect(source, shape, enabled, restingElevation = 6.dp),
+            .omniPressEffect(source, shape, enabled),
         enabled = enabled,
         shape = shape,
         colors = colors,
@@ -226,7 +298,15 @@ fun OmniButton(
         border = border,
         contentPadding = contentPadding,
         interactionSource = source,
-        content = content
+        content = {
+            ProvideTextStyle(
+                LocalTextStyle.current.copy(
+                    color = if (enabled) colors.contentColor else colors.disabledContentColor
+                )
+            ) {
+                content()
+            }
+        }
     )
 }
 
@@ -236,7 +316,10 @@ fun OmniOutlinedButton(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     shape: Shape = RoundedCornerShape(14.dp),
-    colors: ButtonColors = ButtonDefaults.outlinedButtonColors(),
+    colors: ButtonColors = ButtonDefaults.outlinedButtonColors(
+        contentColor = DeepBlue,
+        disabledContentColor = DeepBlue.copy(alpha = 0.32f)
+    ),
     elevation: ButtonElevation? = null,
     border: BorderStroke? = ButtonDefaults.outlinedButtonBorder(enabled),
     contentPadding: PaddingValues = ButtonDefaults.ContentPadding,
@@ -248,7 +331,7 @@ fun OmniOutlinedButton(
         onClick = onClick,
         modifier = modifier
             .heightIn(min = 40.dp)
-            .omniPressEffect(source, shape, enabled, restingElevation = 1.dp),
+            .omniPressEffect(source, shape, enabled),
         enabled = enabled,
         shape = shape,
         colors = colors,
@@ -256,7 +339,15 @@ fun OmniOutlinedButton(
         border = border,
         contentPadding = contentPadding,
         interactionSource = source,
-        content = content
+        content = {
+            ProvideTextStyle(
+                LocalTextStyle.current.copy(
+                    color = if (enabled) colors.contentColor else colors.disabledContentColor
+                )
+            ) {
+                content()
+            }
+        }
     )
 }
 
@@ -266,7 +357,10 @@ fun OmniTextButton(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     shape: Shape = RoundedCornerShape(12.dp),
-    colors: ButtonColors = ButtonDefaults.textButtonColors(),
+    colors: ButtonColors = ButtonDefaults.textButtonColors(
+        contentColor = BrandBlue,
+        disabledContentColor = DeepBlue.copy(alpha = 0.32f)
+    ),
     elevation: ButtonElevation? = null,
     border: BorderStroke? = null,
     contentPadding: PaddingValues = ButtonDefaults.TextButtonContentPadding,
@@ -286,7 +380,15 @@ fun OmniTextButton(
         border = border,
         contentPadding = contentPadding,
         interactionSource = source,
-        content = content
+        content = {
+            ProvideTextStyle(
+                LocalTextStyle.current.copy(
+                    color = if (enabled) colors.contentColor else colors.disabledContentColor
+                )
+            ) {
+                content()
+            }
+        }
     )
 }
 
@@ -314,7 +416,6 @@ fun OmniIconButton(
 fun Modifier.omniClickable(
     enabled: Boolean = true,
     shape: Shape = RoundedCornerShape(12.dp),
-    restingElevation: androidx.compose.ui.unit.Dp = 0.dp,
     onClick: () -> Unit
 ): Modifier {
     val source = remember { MutableInteractionSource() }
@@ -322,12 +423,11 @@ fun Modifier.omniClickable(
         .omniPressEffect(
             interactionSource = source,
             shape = shape,
-            enabled = enabled,
-            restingElevation = restingElevation
+            enabled = enabled
         )
         .clickable(
             interactionSource = source,
-            indication = null,
+            indication = LocalIndication.current,
             enabled = enabled,
             onClick = onClick
         )

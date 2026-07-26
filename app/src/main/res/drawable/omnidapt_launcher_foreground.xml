@@ -5,5 +5,5 @@
         android:antialias="true"
         android:filter="true"
         android:gravity="fill"
-        android:src="@drawable/mg_logo_mark" />
+        android:src="@drawable/mg_logo_mark_transparent" />
 </inset>

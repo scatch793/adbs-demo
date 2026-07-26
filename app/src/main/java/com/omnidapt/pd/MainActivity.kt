@@ -45,6 +45,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
@@ -58,6 +59,7 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.automirrored.filled.ShowChart
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.AccessTime
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Download
@@ -68,6 +70,7 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MedicalServices
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.ShowChart
@@ -317,9 +320,9 @@ private fun LoginScreen(onLogin: (UserRole) -> Unit) {
     }
 
     dialogMessage?.let { message ->
-        AlertDialog(
+        PremiumAlertDialog(
             onDismissRequest = { dialogMessage = null },
-            containerColor = Color.White,
+            containerColor = PremiumSurfaceStrong,
             tonalElevation = 0.dp,
             title = {
                 Text(
@@ -385,7 +388,7 @@ private fun LoginBrandPanel(modifier: Modifier = Modifier, compact: Boolean) {
 private fun LoginBrandLockup(compact: Boolean) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Image(
-            painter = painterResource(id = R.drawable.mg_logo_mark),
+            painter = painterResource(id = R.drawable.mg_logo_mark_transparent),
             contentDescription = "Ominidapt PD Logo",
             modifier = Modifier.size(if (compact) 72.dp else 92.dp),
             contentScale = ContentScale.Fit
@@ -421,7 +424,7 @@ private fun LoginForm(
             .fillMaxWidth()
             .widthIn(max = 470.dp),
         shape = RoundedCornerShape(8.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.White),
+        colors = CardDefaults.cardColors(containerColor = PremiumSurfaceStrong),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
         border = androidx.compose.foundation.BorderStroke(1.dp, Border)
     ) {
@@ -525,6 +528,7 @@ private fun LoginForm(
             ) {
                 Text(
                     if (selectedRole == UserRole.Doctor) "进入医生工作台" else "进入患者端",
+                    color = Color.White,
                     fontSize = 16.sp,
                     fontWeight = FontWeight.SemiBold
                 )
@@ -558,7 +562,7 @@ private fun RoleSelector(selectedRole: UserRole, onRoleChange: (UserRole) -> Uni
             .fillMaxWidth()
             .height(48.dp)
             .clip(RoundedCornerShape(8.dp))
-            .background(PanelBg)
+            .background(PremiumSurfaceStrong)
             .border(1.dp, Border, RoundedCornerShape(8.dp))
             .padding(4.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp)
@@ -595,7 +599,7 @@ private fun RoleButton(
             .fillMaxHeight()
             .clip(RoundedCornerShape(6.dp))
             .background(if (selected) BrandBlue else Color.Transparent)
-            .clickable(onClick = onClick),
+            .omniClickable(shape = RoundedCornerShape(6.dp), onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
         Row(
@@ -646,6 +650,11 @@ private fun PatientShell(repository: MockRepository, onLogout: () -> Unit) {
 
     Box(Modifier.fillMaxSize()) {
         Scaffold(
+            modifier = Modifier
+                .widthIn(max = 560.dp)
+                .fillMaxWidth()
+                .fillMaxHeight()
+                .align(Alignment.Center),
             bottomBar = {
                 PatientBottomBar(selected = tab, onSelected = { tab = it })
             },
@@ -743,7 +752,7 @@ private fun PatientTopBar(onLogout: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically
     ) {
         Image(
-            painter = painterResource(id = R.drawable.mg_logo_mark),
+            painter = painterResource(id = R.drawable.mg_logo_mark_transparent),
             contentDescription = null,
             modifier = Modifier.size(64.dp)
         )
@@ -765,7 +774,7 @@ private fun PatientBottomBar(selected: PatientTab, onSelected: (PatientTab) -> U
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = 76.dp),
+            .height(78.dp),
         color = PremiumSurfaceStrong,
         shadowElevation = 12.dp,
         tonalElevation = 1.dp
@@ -936,7 +945,7 @@ private fun MedicationActionButton(
             .clip(RoundedCornerShape(18.dp))
             .background(bg)
             .border(1.dp, borderColor, RoundedCornerShape(18.dp))
-            .clickable(onClick = onClick),
+            .omniClickable(shape = RoundedCornerShape(18.dp), onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1019,7 +1028,7 @@ private fun SeveritySelector(value: Float, onValueChange: (Float) -> Unit) {
                         .clip(CircleShape)
                         .background(if (index <= selected) Color(0xFF1069E3) else Color.White)
                         .border(3.dp, if (index <= selected) Color(0xFF1069E3) else Color(0xFFD0D4DC), CircleShape)
-                        .clickable { onValueChange(index.toFloat()) }
+                        .omniClickable(shape = CircleShape) { onValueChange(index.toFloat()) }
                 )
             }
         }
@@ -1495,10 +1504,7 @@ private fun PatientProfileScreen(patient: Patient, onLogout: () -> Unit) {
             .heightIn(min = 58.dp)
             .clip(RoundedCornerShape(35.dp))
             .border(2.dp, Color(0xFF1069E3), RoundedCornerShape(35.dp))
-            .omniClickable(
-                shape = RoundedCornerShape(35.dp),
-                restingElevation = 2.dp
-            ) { onLogout() },
+            .omniClickable(shape = RoundedCornerShape(35.dp)) { onLogout() },
         contentAlignment = Alignment.Center
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1734,7 +1740,7 @@ private fun TuningScoreRow(score: Int, onScoreChange: (Int) -> Unit) {
                         .clip(RoundedCornerShape(15.dp))
                         .background(if (score == i + 1) Color(0xFFEAF2FF) else Color(0xFFF3F5F8))
                         .border(1.dp, if (score == i + 1) Color(0xFF1069E3) else Color(0xFFD0D5DE), RoundedCornerShape(15.dp))
-                        .clickable { onScoreChange(i + 1) },
+                        .omniClickable(shape = RoundedCornerShape(15.dp)) { onScoreChange(i + 1) },
                     contentAlignment = Alignment.Center
                 ) {
                     Text(label, color = if (score == i + 1) Color(0xFF1069E3) else Color(0xFF808593), fontSize = 12.sp)
@@ -1787,7 +1793,7 @@ private fun TogglePill(text: String, selected: Boolean, onClick: () -> Unit) {
             .clip(RoundedCornerShape(15.dp))
             .background(if (selected) Color(0xFFEAF2FF) else Color(0xFFF2F4F7))
             .border(1.dp, if (selected) Color(0xFF1069E3) else Color(0xFFD0D5DE), RoundedCornerShape(15.dp))
-            .clickable(onClick = onClick),
+            .omniClickable(shape = RoundedCornerShape(15.dp), onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
         Text(text, color = if (selected) Color(0xFF1069E3) else Color(0xFF808593), fontSize = 16.sp, fontWeight = FontWeight.Bold)
@@ -1844,7 +1850,11 @@ private fun TabletDoctorShell(repository: MockRepository, onLogout: () -> Unit) 
         }
         val gap = if (compact) 10.dp else 12.dp
 
-        Row(Modifier.fillMaxSize()) {
+        Row(
+            Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+        ) {
             TabletDoctorSidebar(
                 patient = selectedPatientRecord,
                 selected = selected,
@@ -1965,7 +1975,15 @@ private fun TabletDoctorSidebar(
         modifier = Modifier
             .width(sidebarWidth)
             .fillMaxHeight()
-            .background(PremiumSurfaceStrong)
+            .background(
+                Brush.verticalGradient(
+                    listOf(
+                        PremiumSurfaceStrong,
+                        Color(0xF7F8FBFF),
+                        Color(0xF2F1F6FF)
+                    )
+                )
+            )
             .border(
                 width = 1.dp,
                 color = PremiumBorder.copy(alpha = 0.8f),
@@ -1978,19 +1996,29 @@ private fun TabletDoctorSidebar(
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Image(
-                painterResource(R.drawable.mg_logo_mark),
+                painterResource(R.drawable.mg_logo_mark_transparent),
                 contentDescription = "Ominidapt PD",
                 modifier = Modifier.size(if (dense || compact) 50.dp else 58.dp)
             )
             Spacer(Modifier.width(8.dp))
-            Text(
-                "Ominidapt PD",
-                color = Color(0xFF1069E3),
-                fontSize = if (dense || compact) 15.sp else 17.sp,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+            Column {
+                Text(
+                    "Ominidapt PD",
+                    color = Color(0xFF1069E3),
+                    fontSize = if (dense || compact) 15.sp else 17.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    "CLINICAL INTELLIGENCE",
+                    color = Color(0xFF7D91B2),
+                    fontSize = if (dense || compact) 7.sp else 8.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 0.7.sp,
+                    maxLines = 1
+                )
+            }
         }
         Spacer(Modifier.height(if (dense) 8.dp else if (compact) 18.dp else 22.dp))
         DoctorSidePatientCard(patient = patient, compact = compact || dense)
@@ -2022,14 +2050,14 @@ private fun TabletDoctorSidebar(
 private fun DoctorSidePatientCard(patient: DoctorPatientRecord?, compact: Boolean) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(6.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.White),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = PremiumSurfaceStrong),
+        elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .border(1.dp, Color(0xFFE3E8F0), RoundedCornerShape(6.dp))
+                .border(1.dp, PremiumBorder, RoundedCornerShape(16.dp))
                 .padding(if (compact) 10.dp else 14.dp)
         ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -2068,11 +2096,6 @@ private fun TabletMenuItem(
     onSelected: (DoctorScreen) -> Unit
 ) {
     val active = selected == screen && enabled
-    val activeBackground by animateColorAsState(
-        targetValue = if (active) Color(0xFF1069E3) else Color.Transparent,
-        animationSpec = tween(OmniMotion.StateMillis, easing = FastOutSlowInEasing),
-        label = "doctorMenuBackground"
-    )
     val contentColor = when {
         active -> Color.White
         enabled -> Color(0xFF6D7486)
@@ -2083,16 +2106,37 @@ private fun TabletMenuItem(
             .fillMaxWidth()
             .heightIn(min = if (compact) 42.dp else 48.dp)
             .clip(RoundedCornerShape(12.dp))
-            .background(activeBackground)
+            .background(
+                Brush.horizontalGradient(
+                    if (active) {
+                        listOf(Color(0xFF0D6DE8), Color(0xFF287FF0), Color(0xFF416FE2))
+                    } else {
+                        listOf(Color.Transparent, Color.Transparent)
+                    }
+                )
+            )
             .omniClickable(
                 enabled = enabled,
-                shape = RoundedCornerShape(12.dp),
-                restingElevation = if (active) 4.dp else 0.dp
+                shape = RoundedCornerShape(12.dp)
             ) { onSelected(screen) }
             .padding(horizontal = if (compact) 10.dp else 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(Modifier.width(24.dp), contentAlignment = Alignment.Center) {
+        Box(
+            Modifier
+                .width(3.dp)
+                .height(if (active) 24.dp else 12.dp)
+                .clip(CircleShape)
+                .background(if (active) Color(0xFF9FE8FF) else Color.Transparent)
+        )
+        Spacer(Modifier.width(if (compact) 7.dp else 9.dp))
+        Box(
+            Modifier
+                .size(if (compact) 28.dp else 30.dp)
+                .clip(RoundedCornerShape(9.dp))
+                .background(if (active) Color.White.copy(alpha = 0.14f) else Color.Transparent),
+            contentAlignment = Alignment.Center
+        ) {
             Icon(
                 painter = painterResource(iconRes),
                 contentDescription = null,
@@ -2100,7 +2144,7 @@ private fun TabletMenuItem(
                 modifier = Modifier.size(if (compact) 21.dp else 23.dp)
             )
         }
-        Spacer(Modifier.width(if (compact) 9.dp else 11.dp))
+        Spacer(Modifier.width(if (compact) 7.dp else 9.dp))
         Text(
             label,
             color = contentColor,
@@ -2144,7 +2188,11 @@ private fun DoctorDeviceStatusCard(
         }
         HorizontalDivider(Modifier.padding(vertical = 7.dp), color = Color(0xFFE8ECF2))
         Row(
-            modifier = Modifier.fillMaxWidth().height(24.dp).clickable(onClick = onOpenSettings),
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 40.dp)
+                .omniClickable(shape = RoundedCornerShape(10.dp), onClick = onOpenSettings)
+                .padding(horizontal = 2.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
@@ -2180,7 +2228,9 @@ private fun DoctorDeviceCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable(onClick = onOpenSettings),
+                .heightIn(min = 48.dp)
+                .omniClickable(shape = RoundedCornerShape(10.dp), onClick = onOpenSettings)
+                .padding(horizontal = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(Icons.Filled.Settings, contentDescription = null, tint = Color(0xFF717789), modifier = Modifier.size(24.dp))
@@ -2205,6 +2255,54 @@ private fun DoctorToast(message: String, modifier: Modifier = Modifier) {
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
         )
     }
+}
+
+@Composable
+private fun PremiumAlertDialog(
+    onDismissRequest: () -> Unit,
+    confirmButton: @Composable () -> Unit,
+    modifier: Modifier = Modifier,
+    dismissButton: (@Composable () -> Unit)? = null,
+    icon: (@Composable () -> Unit)? = null,
+    title: (@Composable () -> Unit)? = null,
+    text: (@Composable () -> Unit)? = null,
+    shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(24.dp),
+    containerColor: Color = PremiumSurfaceStrong,
+    tonalElevation: Dp = 8.dp
+) {
+    AlertDialog(
+        onDismissRequest = onDismissRequest,
+        confirmButton = confirmButton,
+        modifier = modifier.widthIn(max = 600.dp),
+        dismissButton = dismissButton,
+        icon = icon,
+        title = title?.let { titleContent ->
+            {
+                Column {
+                    Box(
+                        Modifier
+                            .width(42.dp)
+                            .height(3.dp)
+                            .clip(CircleShape)
+                            .background(
+                                Brush.horizontalGradient(
+                                    listOf(BrandBlue, Color(0xFF45C9ED), Color(0xFF8274E9))
+                                )
+                            )
+                    )
+                    Spacer(Modifier.height(9.dp))
+                    titleContent()
+                }
+            }
+        },
+        text = text,
+        shape = shape,
+        containerColor = containerColor,
+        iconContentColor = BrandBlue,
+        titleContentColor = Ink,
+        textContentColor = MutedText,
+        tonalElevation = tonalElevation
+    )
 }
 
 @Composable
@@ -2344,8 +2442,85 @@ private fun DoctorScrollableContent(
 
 @Composable
 private fun TabletPageTitle(title: String) {
-    Text(title, color = Color(0xFF2B2F38), fontSize = 24.sp, fontWeight = FontWeight.Bold)
-    Spacer(Modifier.height(12.dp))
+    val eyebrow = when (title) {
+        "患者列表" -> "PATIENT DIRECTORY"
+        "患者信息" -> "PATIENT INSIGHT"
+        "文件导出" -> "DATA EXPORT HUB"
+        "个人设置" -> "CLINICIAN WORKSPACE"
+        "初始化与参数调整" -> "NEUROMODULATION WORKFLOW"
+        "实时观测" -> "REAL-TIME SIGNAL CENTER"
+        else -> "CLINICAL CONTROL CENTER"
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 62.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .background(
+                Brush.horizontalGradient(
+                    listOf(
+                        PremiumSurfaceStrong,
+                        Color(0xEEF1F8FF),
+                        Color(0xEDEEF1FF)
+                    )
+                )
+            )
+            .border(1.dp, PremiumBorder.copy(alpha = 0.94f), RoundedCornerShape(18.dp))
+            .padding(horizontal = 15.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            Modifier
+                .width(4.dp)
+                .height(38.dp)
+                .clip(CircleShape)
+                .background(
+                    Brush.verticalGradient(
+                        listOf(Color(0xFF34C7F3), BrandBlue, Color(0xFF6D5DE7))
+                    )
+                )
+        )
+        Spacer(Modifier.width(12.dp))
+        Column {
+            Text(
+                eyebrow,
+                color = Color(0xFF6F86A8),
+                fontSize = 8.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.1.sp
+            )
+            Text(
+                title,
+                color = Color(0xFF202B43),
+                fontSize = 24.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        Spacer(Modifier.weight(1f))
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = Color(0xFFEAF5FF),
+            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFCAE2FA))
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 11.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(Modifier.size(7.dp).clip(CircleShape).background(MedicalGreen))
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    "SYSTEM ONLINE",
+                    color = Color(0xFF426387),
+                    fontSize = 8.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 0.6.sp
+                )
+            }
+        }
+    }
+    Spacer(Modifier.height(10.dp))
 }
 
 @Composable
@@ -2395,8 +2570,8 @@ private fun TabletPatientListPage(
     }
 
     pendingDelete?.let { patient ->
-        AlertDialog(
-            containerColor = Color.White,
+        PremiumAlertDialog(
+            containerColor = PremiumSurfaceStrong,
             onDismissRequest = { pendingDelete = null },
             title = { Text("删除患者") },
             text = { Text("确认删除 ${patient.name}（${patient.number}）吗？该操作只影响本地演示列表。") },
@@ -2418,44 +2593,104 @@ private fun TabletPatientListPage(
     }
 
     TabletPageTitle("患者列表")
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Button(onClick = { addDialogOpen = true }, shape = RoundedCornerShape(8.dp), modifier = Modifier.height(40.dp)) {
-            Text("+ 新增")
-        }
-        Spacer(Modifier.width(8.dp))
-        Box {
-            OutlinedButton(onClick = { sortMenuExpanded = true }, shape = RoundedCornerShape(8.dp), modifier = Modifier.height(40.dp)) {
-                Text("${sortField.label()} ${if (ascending) "升序" else "降序"}")
-            }
-            DropdownMenu(
-                expanded = sortMenuExpanded,
-                onDismissRequest = { sortMenuExpanded = false },
-                containerColor = Color.White
-            ) {
-                PatientSortField.values().forEach { field ->
-                    DropdownMenuItem(
-                        text = { Text(field.label()) },
-                        onClick = {
-                            if (sortField == field) {
-                                ascending = !ascending
-                            } else {
-                                sortField = field
-                                ascending = field == PatientSortField.Name
-                            }
-                            sortMenuExpanded = false
-                        }
+    DoctorPanel {
+        val searchField: @Composable (Modifier) -> Unit = { fieldModifier ->
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                modifier = fieldModifier.height(50.dp),
+                singleLine = true,
+                shape = RoundedCornerShape(15.dp),
+                leadingIcon = {
+                    Icon(
+                        Icons.Filled.Search,
+                        contentDescription = null,
+                        tint = Color(0xFF6681A7),
+                        modifier = Modifier.size(21.dp)
                     )
+                },
+                placeholder = {
+                    Text(
+                        "搜索姓名、编号、植入日期或情况简介",
+                        color = Color(0xFF8B96A9),
+                        fontSize = 13.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                },
+                textStyle = androidx.compose.ui.text.TextStyle(color = Ink, fontSize = 14.sp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = BrandBlue,
+                    unfocusedBorderColor = Color(0xFFDCE6F3),
+                    focusedContainerColor = Color(0xF7FFFFFF),
+                    unfocusedContainerColor = Color(0xF3FFFFFF),
+                    cursorColor = BrandBlue
+                )
+            )
+        }
+        val actionButtons: @Composable () -> Unit = {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(9.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box {
+                    OutlinedButton(
+                        onClick = { sortMenuExpanded = true },
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.height(46.dp),
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp)
+                    ) {
+                        Icon(Icons.Filled.Tune, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(7.dp))
+                        Text("${sortField.label()} · ${if (ascending) "升序" else "降序"}", fontSize = 13.sp)
+                    }
+                    DropdownMenu(
+                        expanded = sortMenuExpanded,
+                        onDismissRequest = { sortMenuExpanded = false },
+                        containerColor = PremiumSurfaceStrong
+                    ) {
+                        PatientSortField.values().forEach { field ->
+                            DropdownMenuItem(
+                                text = { Text(field.label()) },
+                                onClick = {
+                                    if (sortField == field) {
+                                        ascending = !ascending
+                                    } else {
+                                        sortField = field
+                                        ascending = field == PatientSortField.Name
+                                    }
+                                    sortMenuExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
+                Button(
+                    onClick = { addDialogOpen = true },
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.height(46.dp),
+                    contentPadding = PaddingValues(horizontal = 17.dp, vertical = 0.dp)
+                ) {
+                    Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(19.dp))
+                    Spacer(Modifier.width(7.dp))
+                    Text("新增患者", fontSize = 13.sp)
                 }
             }
         }
-        Spacer(Modifier.width(8.dp))
-        OutlinedTextField(
-            value = query,
-            onValueChange = { query = it },
-            modifier = Modifier.weight(1f).height(56.dp),
-            singleLine = true,
-            placeholder = { Text("筛选患者姓名 / 编号 / 设备植入时间 / 情况简介") }
-        )
+        if (compact) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                searchField(Modifier.fillMaxWidth())
+                Box(Modifier.align(Alignment.End)) { actionButtons() }
+            }
+        } else {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                searchField(Modifier.weight(1f))
+                actionButtons()
+            }
+        }
     }
     Spacer(Modifier.height(12.dp))
     DoctorPanel {
@@ -2508,7 +2743,8 @@ private fun PatientGroupCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable(onClick = onToggleExpanded),
+                .heightIn(min = 48.dp)
+                .omniClickable(shape = RoundedCornerShape(10.dp), onClick = onToggleExpanded),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(group.label(), color = Color(0xFF717789), fontSize = 20.sp, fontWeight = FontWeight.Bold)
@@ -2603,8 +2839,8 @@ private fun AddDoctorPatientDialog(
     val canSave = name.isNotBlank() && gender.isNotBlank() && age.toIntOrNull() != null &&
         number.isNotBlank() && implantDate.isNotBlank() && summary.isNotBlank()
 
-    AlertDialog(
-        containerColor = Color.White,
+    PremiumAlertDialog(
+        containerColor = PremiumSurfaceStrong,
         onDismissRequest = onDismiss,
         title = { Text("新增患者") },
         text = {
@@ -2811,8 +3047,8 @@ private fun EditDoctorPatientDialog(
     val canSave = name.isNotBlank() && gender.isNotBlank() && age.toIntOrNull() != null &&
         number.isNotBlank() && implantDate.isNotBlank() && summary.isNotBlank()
 
-    AlertDialog(
-        containerColor = Color.White,
+    PremiumAlertDialog(
+        containerColor = PremiumSurfaceStrong,
         onDismissRequest = onDismiss,
         title = { Text("编辑患者档案") },
         text = {
@@ -2878,8 +3114,8 @@ private fun TelehealthDialog(
     LaunchedEffect(patient.id) {
         session = repository.startTelehealth(patient.id)
     }
-    AlertDialog(
-        containerColor = Color.White,
+    PremiumAlertDialog(
+        containerColor = PremiumSurfaceStrong,
         onDismissRequest = onDismiss,
         title = { Text("远程诊疗 - ${patient.name}") },
         text = {
@@ -3039,7 +3275,7 @@ private fun TabletExportPageV2(
                 DropdownMenu(
                     expanded = dateMenu,
                     onDismissRequest = { dateMenu = false },
-                    containerColor = Color.White
+                    containerColor = PremiumSurfaceStrong
                 ) {
                     DoctorDateRange.options.forEach { item ->
                         DropdownMenuItem(text = { Text(item.label) }, onClick = { dateRange = item; dateMenu = false })
@@ -3051,7 +3287,7 @@ private fun TabletExportPageV2(
                 DropdownMenu(
                     expanded = typeMenu,
                     onDismissRequest = { typeMenu = false },
-                    containerColor = Color.White
+                    containerColor = PremiumSurfaceStrong
                 ) {
                     DropdownMenuItem(text = { Text("全部类型") }, onClick = { typeFilter = null; typeMenu = false })
                     ExportFileType.values().forEach { type ->
@@ -3218,7 +3454,7 @@ private fun ClickableFilterChip(label: String, value: String, onClick: () -> Uni
                 .height(40.dp)
                 .clip(RoundedCornerShape(18.dp))
                 .border(1.dp, Color(0xFFE1E6EE), RoundedCornerShape(18.dp))
-                .clickable(onClick = onClick)
+                .omniClickable(shape = RoundedCornerShape(18.dp), onClick = onClick)
                 .padding(horizontal = 12.dp),
             contentAlignment = Alignment.CenterStart
         ) {
@@ -3236,7 +3472,7 @@ private fun ExportTypeIconBox(format: ExportFormat, selected: ExportFormat, onSe
             .width(58.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(if (active) Color(0xFFE7F0FF) else Color.Transparent)
-            .clickable { onSelected(format) }
+            .omniClickable(shape = RoundedCornerShape(8.dp)) { onSelected(format) }
             .padding(vertical = 8.dp)
     ) {
         Image(painterResource(exportIconRes(format)), contentDescription = null, modifier = Modifier.size(34.dp))
@@ -3409,7 +3645,7 @@ private fun ExportTypeBox(format: ExportFormat, selected: ExportFormat, color: C
         modifier = Modifier
             .clip(RoundedCornerShape(8.dp))
             .background(if (active) Color(0xFFE7F0FF) else Color.Transparent)
-            .clickable { onSelected(format) }
+            .omniClickable(shape = RoundedCornerShape(8.dp)) { onSelected(format) }
             .padding(6.dp)
     ) {
         Box(Modifier.size(42.dp).background(Color.White), contentAlignment = Alignment.Center) {
@@ -3421,7 +3657,14 @@ private fun ExportTypeBox(format: ExportFormat, selected: ExportFormat, color: C
 
 @Composable
 private fun SettingLine(text: String, on: Boolean, onClick: () -> Unit = {}) {
-    Row(Modifier.fillMaxWidth().height(30.dp).clickable(onClick = onClick), verticalAlignment = Alignment.CenterVertically) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 42.dp)
+            .omniClickable(shape = RoundedCornerShape(10.dp), onClick = onClick)
+            .padding(horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
         Text("i", color = Color(0xFF9ABEF2), fontSize = 12.sp, modifier = Modifier.width(18.dp))
         Text(text, color = Color(0xFF5F687B), fontSize = 13.sp, modifier = Modifier.weight(1f))
         Box(
@@ -3456,7 +3699,7 @@ private fun ExportFileRow(file: ExportFileRecord, selected: Boolean, onToggle: (
             .height(44.dp)
             .clip(RoundedCornerShape(4.dp))
             .background(if (selected) Color(0xFFE6F0FF) else Color.White)
-            .clickable(onClick = onToggle),
+            .omniClickable(shape = RoundedCornerShape(4.dp), onClick = onToggle),
         verticalAlignment = Alignment.CenterVertically
     ) {
         WeightedDoctorCell(if (selected) "☑" else "□", 0.55f, selected)
@@ -3499,8 +3742,8 @@ private fun TabletSettingsPage(
     }
 
     detail?.let { title ->
-        AlertDialog(
-            containerColor = Color.White,
+        PremiumAlertDialog(
+            containerColor = PremiumSurfaceStrong,
             onDismissRequest = { detail = null },
             title = { Text(title) },
             text = {
@@ -3535,8 +3778,8 @@ private fun TabletSettingsPage(
         )
     }
     if (confirmLogout) {
-        AlertDialog(
-            containerColor = Color.White,
+        PremiumAlertDialog(
+            containerColor = PremiumSurfaceStrong,
             onDismissRequest = { confirmLogout = false },
             title = { Text("退出登录") },
             text = { Text("确认返回登录页？当前演示数据会保留在内存中，重启应用后恢复默认数据。") },
@@ -3579,7 +3822,13 @@ private fun TabletSettingsPage(
     }
     Spacer(Modifier.height(36.dp))
     DoctorPanel {
-        Box(Modifier.fillMaxWidth().height(54.dp).clickable { confirmLogout = true }, contentAlignment = Alignment.Center) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(min = 54.dp)
+                .omniClickable(shape = RoundedCornerShape(12.dp)) { confirmLogout = true },
+            contentAlignment = Alignment.Center
+        ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.size(24.dp).background(Color(0xFF1069E3)), contentAlignment = Alignment.Center) { Text("→", color = Color.White) }
                 Spacer(Modifier.width(12.dp))
@@ -3592,7 +3841,14 @@ private fun TabletSettingsPage(
 @Composable
 private fun DoctorInteractiveSettingRow(title: String, subtitle: String, iconRes: Int, onClick: () -> Unit) {
     DoctorPanel(modifier = Modifier.padding(bottom = 2.dp)) {
-        Row(Modifier.clickable(onClick = onClick), verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(min = 56.dp)
+                .omniClickable(shape = RoundedCornerShape(12.dp), onClick = onClick)
+                .padding(horizontal = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             Image(painterResource(iconRes), contentDescription = null, modifier = Modifier.size(30.dp))
             Spacer(Modifier.width(22.dp))
             Column(Modifier.weight(1f)) {
@@ -3623,8 +3879,8 @@ private fun TabletParameterPageV3(
     val workflowScrollState = remember(workflow.step) { ScrollState(0) }
 
     if (showResetDialog) {
-        AlertDialog(
-            containerColor = Color.White,
+        PremiumAlertDialog(
+            containerColor = PremiumSurfaceStrong,
             onDismissRequest = { showResetDialog = false },
             title = { Text("重新进行初始化") },
             text = { Text("将清空当前患者的电极配置、采样进度和频段结果，并回到第一步。") },
@@ -3658,8 +3914,7 @@ private fun TabletParameterPageV3(
 
     val workflowOffset = with(LocalDensity.current) { 12.dp.roundToPx() }
     Column(modifier) {
-        Text("初始化与参数调整", color = Color(0xFF2B2F38), fontSize = 24.sp, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(10.dp))
+        TabletPageTitle("初始化与参数调整")
         DoctorWorkflowHeader(
             step = workflow.step,
             onPrevious = {
@@ -3859,15 +4114,17 @@ private fun WorkflowHeaderButtons(
     OutlinedButton(
         onClick = onPrevious,
         enabled = step != InitializationStep.ElectrodeConfig,
-        modifier = Modifier.height(34.dp),
-        shape = RoundedCornerShape(17.dp)
-    ) { Text("上一步", fontSize = 12.sp) }
+        modifier = Modifier.height(42.dp),
+        shape = RoundedCornerShape(14.dp),
+        contentPadding = PaddingValues(horizontal = 15.dp, vertical = 0.dp)
+    ) { Text("←  上一步", fontSize = 12.sp, fontWeight = FontWeight.Bold) }
     OutlinedButton(
         onClick = onReset,
         enabled = step == InitializationStep.Completed,
-        modifier = Modifier.height(34.dp),
-        shape = RoundedCornerShape(17.dp)
-    ) { Text("重新进行初始化", fontSize = 12.sp) }
+        modifier = Modifier.height(42.dp),
+        shape = RoundedCornerShape(14.dp),
+        contentPadding = PaddingValues(horizontal = 15.dp, vertical = 0.dp)
+    ) { Text("↻  重新初始化", fontSize = 12.sp, fontWeight = FontWeight.Bold) }
 }
 
 @Composable
@@ -3883,13 +4140,13 @@ private fun ElectrodeConfigurationContentV3(
     BoxWithConstraints {
         val stacked = maxWidth < 760.dp
         val electrode: @Composable () -> Unit = {
-            DoctorPanel(modifier = Modifier.height(if (stacked) 390.dp else 390.dp)) {
+            DoctorPanel(modifier = Modifier.height(if (stacked) 410.dp else 405.dp)) {
                 ResourceSectionTitle("电极配置", R.drawable.doctor_section_electrode)
                 Text("左右脑各选择一对正负触点。点击数字、柱段或右侧极性区均可完成选择。", color = Color(0xFF717789), fontSize = 12.sp)
                 Spacer(Modifier.height(8.dp))
                 Row(
                     Modifier.fillMaxWidth().weight(1f),
-                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalAlignment = Alignment.Top
                 ) {
                     ElectrodeColumnV3(
@@ -3898,7 +4155,8 @@ private fun ElectrodeConfigurationContentV3(
                         positive = selection.leftPositive,
                         negative = selection.leftNegative,
                         onPositive = { if (it != selection.leftNegative) onSelectionChange(selection.copy(leftPositive = it)) },
-                        onNegative = { if (it != selection.leftPositive) onSelectionChange(selection.copy(leftNegative = it)) }
+                        onNegative = { if (it != selection.leftPositive) onSelectionChange(selection.copy(leftNegative = it)) },
+                        modifier = Modifier.weight(1f)
                     )
                     ElectrodeColumnV3(
                         title = "右脑",
@@ -3906,7 +4164,8 @@ private fun ElectrodeConfigurationContentV3(
                         positive = selection.rightPositive,
                         negative = selection.rightNegative,
                         onPositive = { if (it != selection.rightNegative) onSelectionChange(selection.copy(rightPositive = it)) },
-                        onNegative = { if (it != selection.rightPositive) onSelectionChange(selection.copy(rightNegative = it)) }
+                        onNegative = { if (it != selection.rightPositive) onSelectionChange(selection.copy(rightNegative = it)) },
+                        modifier = Modifier.weight(1f)
                     )
                 }
                 Text(
@@ -3918,7 +4177,7 @@ private fun ElectrodeConfigurationContentV3(
             }
         }
         val impedance: @Composable () -> Unit = {
-            DoctorPanel(modifier = Modifier.height(if (stacked) 470.dp else 390.dp)) {
+            DoctorPanel(modifier = Modifier.height(if (stacked) 470.dp else 405.dp)) {
                 ResourceSectionTitle("阻抗测试", R.drawable.doctor_section_impedance)
                 Text("阻抗单位 kΩ；图表数据由 MockRepository 接口提供，可直接替换为设备输入。", color = Color(0xFF717789), fontSize = 11.sp)
                 Spacer(Modifier.height(6.dp))
@@ -3988,12 +4247,47 @@ private fun ElectrodeColumnV3(
     positive: Int,
     negative: Int,
     onPositive: (Int) -> Unit,
-    onNegative: (Int) -> Unit
+    onNegative: (Int) -> Unit,
+    modifier: Modifier = Modifier
 ) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.width(150.dp)) {
-        Text(title, color = Color(0xFF3D3D3D), fontSize = 16.sp, fontWeight = FontWeight.Bold)
-        Text("选择一对正/负触点", color = Color(0xFF8A91A0), fontSize = 10.sp)
-        Spacer(Modifier.height(5.dp))
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = modifier
+            .clip(RoundedCornerShape(16.dp))
+            .background(
+                Brush.verticalGradient(
+                    listOf(Color(0xFFF7FBFF), Color(0xFFF2F6FC), Color(0xFFF8F7FF))
+                )
+            )
+            .border(1.dp, Color(0xFFD9E5F3), RoundedCornerShape(16.dp))
+            .padding(7.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                Modifier
+                    .size(27.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(
+                        Brush.linearGradient(
+                            listOf(Color(0xFF0E70E8), Color(0xFF43BCE8))
+                        )
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    if (title == "左脑") "L" else "R",
+                    color = Color.White,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            Spacer(Modifier.width(7.dp))
+            Text(title, color = Color(0xFF26344D), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        }
+        Spacer(Modifier.height(6.dp))
         contacts.forEach { contact ->
             val role = when (contact) {
                 positive -> "+"
@@ -4003,58 +4297,88 @@ private fun ElectrodeColumnV3(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(45.dp)
-                    .clip(RoundedCornerShape(7.dp))
-                    .clickable {
+                    .height(42.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(
+                        when (role) {
+                            "+" -> Color(0xFFE7F3FF)
+                            "-" -> Color(0xFFF0EDFF)
+                            else -> Color(0xF8FFFFFF)
+                        }
+                    )
+                    .border(
+                        1.dp,
+                        when (role) {
+                            "+" -> Color(0xFFB9D9FF)
+                            "-" -> Color(0xFFD6CDFB)
+                            else -> Color(0xFFE2E8F1)
+                        },
+                        RoundedCornerShape(12.dp)
+                    )
+                    .omniClickable(shape = RoundedCornerShape(12.dp)) {
                         when (role) {
                             "+" -> onNegative(contact)
                             "-" -> onPositive(contact)
                             else -> onPositive(contact)
                         }
-                    },
+                    }
+                    .padding(horizontal = 6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Box(Modifier.width(28.dp), contentAlignment = Alignment.Center) {
-                    Text(contact.toString(), color = Color(0xFF626A7C), fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                }
                 Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
-                        .padding(vertical = 2.dp)
-                        .clip(RoundedCornerShape(50))
+                    Modifier
+                        .width(34.dp)
+                        .height(28.dp)
+                        .clip(RoundedCornerShape(9.dp))
                         .background(
-                            Brush.verticalGradient(
-                                listOf(Color.White, Color(0xFFE9ECF1), Color.White)
-                            )
-                        )
-                        .border(
-                            1.dp,
-                            if (role.isNotEmpty()) BrandBlue else Color(0xFFDCE1E9),
-                            RoundedCornerShape(50)
-                        )
-                )
-                Spacer(Modifier.width(5.dp))
+                            when (role) {
+                                "+" -> BrandBlue
+                                "-" -> Color(0xFF6F5BDC)
+                                else -> Color(0xFFEDF1F6)
+                            }
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        "C$contact",
+                        color = if (role.isNotEmpty()) Color.White else Color(0xFF5E687B),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                Spacer(Modifier.weight(1f))
                 PolaritySelectorV3("+", role == "+") { onPositive(contact) }
-                Spacer(Modifier.width(3.dp))
+                Spacer(Modifier.width(4.dp))
                 PolaritySelectorV3("-", role == "-") { onNegative(contact) }
             }
+            Spacer(Modifier.height(3.dp))
         }
     }
 }
 
 @Composable
 private fun PolaritySelectorV3(label: String, selected: Boolean, onClick: () -> Unit) {
+    val selectedColor = if (label == "+") BrandBlue else Color(0xFF6F5BDC)
     Box(
         modifier = Modifier
-            .size(27.dp)
+            .size(30.dp)
             .clip(CircleShape)
-            .background(if (selected) BrandBlue else Color.White)
-            .border(1.dp, if (selected) BrandBlue else Color(0xFFD4D9E2), CircleShape)
-            .clickable(onClick = onClick),
+            .background(
+                if (selected) {
+                    Brush.linearGradient(listOf(selectedColor, selectedColor.copy(alpha = 0.82f)))
+                } else {
+                    Brush.linearGradient(listOf(Color.White, Color(0xFFF6F9FD)))
+                }
+            )
+            .border(
+                if (selected) 2.dp else 1.dp,
+                if (selected) selectedColor.copy(alpha = 0.45f) else Color(0xFFD4DDE9),
+                CircleShape
+            )
+            .omniClickable(shape = CircleShape, onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
-        Text(label, color = if (selected) Color.White else Color(0xFF687083), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Text(label, color = if (selected) Color.White else Color(0xFF5E6A7F), fontSize = 14.sp, fontWeight = FontWeight.Bold)
     }
 }
 
@@ -4180,7 +4504,15 @@ private fun StimValueFieldV3(value: String, modifier: Modifier, onValueChange: (
         },
         singleLine = true,
         textStyle = androidx.compose.ui.text.TextStyle(fontSize = 11.sp, textAlign = TextAlign.Center),
-        modifier = modifier.padding(horizontal = 4.dp).height(50.dp)
+        modifier = modifier.padding(horizontal = 4.dp).height(48.dp),
+        shape = RoundedCornerShape(12.dp),
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedBorderColor = BrandBlue,
+            unfocusedBorderColor = Color(0xFFDCE5F1),
+            focusedContainerColor = Color(0xF7FFFFFF),
+            unfocusedContainerColor = Color(0xF2FFFFFF),
+            cursorColor = BrandBlue
+        )
     )
 }
 
@@ -4353,7 +4685,15 @@ private fun FrequencyBandInputV3(label: String, value: String, onValueChange: (S
             onValueChange = onValueChange,
             singleLine = true,
             textStyle = androidx.compose.ui.text.TextStyle(fontSize = 11.sp),
-            modifier = Modifier.width(145.dp).height(48.dp)
+            modifier = Modifier.width(145.dp).height(46.dp),
+            shape = RoundedCornerShape(12.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = BrandBlue,
+                unfocusedBorderColor = Color(0xFFDCE5F1),
+                focusedContainerColor = Color(0xF7FFFFFF),
+                unfocusedContainerColor = Color(0xF2FFFFFF),
+                cursorColor = BrandBlue
+            )
         )
     }
 }
@@ -4371,12 +4711,16 @@ private fun WorkflowBottomActionBar(
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(8.dp),
-        color = Color.White,
-        shadowElevation = 6.dp
+        shape = RoundedCornerShape(18.dp),
+        color = PremiumSurfaceStrong,
+        border = androidx.compose.foundation.BorderStroke(1.dp, PremiumBorder),
+        shadowElevation = 8.dp
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().height(58.dp).padding(horizontal = 14.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 68.dp)
+                .padding(horizontal = 16.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
@@ -4391,38 +4735,53 @@ private fun WorkflowBottomActionBar(
                     Button(
                         onClick = onConfirm,
                         enabled = selectionValid,
-                        modifier = Modifier.width(210.dp).height(38.dp),
-                        shape = RoundedCornerShape(19.dp)
-                    ) { Text("确认并进入基线检测", fontSize = 13.sp) }
+                        modifier = Modifier.width(220.dp).height(46.dp),
+                        shape = RoundedCornerShape(14.dp)
+                    ) { Text("确认并进入基线检测", fontSize = 13.sp, fontWeight = FontWeight.Bold) }
                 }
                 InitializationStep.BaselineDetection -> {
                     val state = workflow.baseline
-                    OutlinedButton(onClick = onStartSampling, enabled = !state.sampling && !state.sampleEnded, modifier = Modifier.height(36.dp)) {
+                    Button(
+                        onClick = onStartSampling,
+                        enabled = !state.sampling && !state.sampleEnded,
+                        modifier = Modifier.height(44.dp),
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
                         Text(if (state.elapsedSeconds > 0) "继续采样" else "开始采样", fontSize = 12.sp)
                     }
-                    OutlinedButton(onClick = onEndSampling, enabled = state.sampling, modifier = Modifier.height(36.dp)) { Text("结束采样", fontSize = 12.sp) }
-                    OutlinedButton(onClick = onPauseSampling, enabled = state.sampling, modifier = Modifier.height(36.dp)) { Text("暂停采样", fontSize = 12.sp) }
+                    OutlinedButton(
+                        onClick = onPauseSampling,
+                        enabled = state.sampling,
+                        modifier = Modifier.height(44.dp),
+                        shape = RoundedCornerShape(14.dp)
+                    ) { Text("暂停采样", fontSize = 12.sp) }
+                    OutlinedButton(
+                        onClick = onEndSampling,
+                        enabled = state.sampling,
+                        modifier = Modifier.height(44.dp),
+                        shape = RoundedCornerShape(14.dp)
+                    ) { Text("结束采样", fontSize = 12.sp) }
                     Spacer(Modifier.weight(1f))
                     Text("第 ${state.activeTask + 1}/4 步  ·  ${state.elapsedSeconds}s", color = Color(0xFF717789), fontSize = 12.sp)
                     Button(
                         onClick = onConfirm,
                         enabled = state.sampleEnded,
-                        modifier = Modifier.width(170.dp).height(38.dp),
-                        shape = RoundedCornerShape(19.dp)
+                        modifier = Modifier.width(190.dp).height(44.dp),
+                        shape = RoundedCornerShape(14.dp)
                     ) { Text(if (state.activeTask == 3) "确认并进入频段提取" else "确认本步", fontSize = 12.sp) }
                 }
                 InitializationStep.FrequencyExtraction -> {
-                    OutlinedButton(onClick = onUseRecommendedBands, modifier = Modifier.height(36.dp), shape = RoundedCornerShape(18.dp)) {
-                        Text("采用推荐参数", fontSize = 12.sp)
+                    OutlinedButton(onClick = onUseRecommendedBands, modifier = Modifier.height(44.dp), shape = RoundedCornerShape(14.dp)) {
+                        Text("采用推荐参数", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     }
                     Spacer(Modifier.weight(1f))
                     Text("确认后保存至当前患者初始化档案", color = Color(0xFF717789), fontSize = 12.sp)
                     Button(
                         onClick = onConfirm,
                         enabled = frequencyValid,
-                        modifier = Modifier.width(220.dp).height(38.dp),
-                        shape = RoundedCornerShape(19.dp)
-                    ) { Text("确认并保存频段结果", fontSize = 13.sp) }
+                        modifier = Modifier.width(230.dp).height(46.dp),
+                        shape = RoundedCornerShape(14.dp)
+                    ) { Text("确认并保存频段结果", fontSize = 13.sp, fontWeight = FontWeight.Bold) }
                 }
                 InitializationStep.Completed -> Unit
             }
@@ -4674,8 +5033,8 @@ private fun TabletParameterPage(
     var pulseWidthUs by remember(patient.id) { mutableIntStateOf(suggestion.suggestedParameters.pulseWidthUs) }
     var dutyCycle by remember(patient.id) { mutableIntStateOf(suggestion.suggestedParameters.dutyCycle) }
     if (showResetDialog) {
-        AlertDialog(
-            containerColor = Color.White,
+        PremiumAlertDialog(
+            containerColor = PremiumSurfaceStrong,
             onDismissRequest = { showResetDialog = false },
             title = { Text("重新进行初始化") },
             text = { Text("将清空当前初始化流程进度，并回到电极信息配置。确认继续吗？") },
@@ -5049,7 +5408,7 @@ private fun ElectrodeContactButton(contact: String, role: String, onPositive: ()
                 .clip(CircleShape)
                 .border(1.dp, if (role == "+") BrandBlue else Color(0xFFCCD5E2), CircleShape)
                 .background(if (role == "-") BrandBlue else Color.White)
-                .clickable {
+                .omniClickable(shape = CircleShape) {
                     if (role == "+") onNegative() else onPositive()
                 },
             contentAlignment = Alignment.Center
@@ -5072,7 +5431,7 @@ private fun PolarityChip(label: String, selected: Boolean, onClick: () -> Unit) 
             .clip(RoundedCornerShape(13.dp))
             .background(if (selected) BrandBlue else Color.White)
             .border(1.dp, if (selected) BrandBlue else Color(0xFFD5DCE8), RoundedCornerShape(13.dp))
-            .clickable(onClick = onClick),
+            .omniClickable(shape = RoundedCornerShape(13.dp), onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
         Text(label, color = if (selected) Color.White else Color(0xFF717789), fontSize = 13.sp, fontWeight = FontWeight.Bold)
@@ -5771,17 +6130,58 @@ private fun BaselineMetric(title: String, value: String, color: Color, modifier:
 private fun WorkflowStepPill(label: String, current: InitializationStep, target: InitializationStep) {
     val isCurrent = current == target
     val isDone = current.ordinal > target.ordinal || current == InitializationStep.Completed
-    Box(
+    Row(
         modifier = Modifier
-            .height(34.dp)
-            .border(if (isCurrent) 1.dp else 0.dp, if (isCurrent) BrandBlue else Color.Transparent, RoundedCornerShape(6.dp))
-            .padding(horizontal = 10.dp),
-        contentAlignment = Alignment.Center
+            .height(42.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(
+                when {
+                    isCurrent -> Color(0xFFE8F3FF)
+                    isDone -> Color(0xFFEAF8F1)
+                    else -> Color(0xFFF5F7FB)
+                }
+            )
+            .border(
+                1.dp,
+                when {
+                    isCurrent -> BrandBlue
+                    isDone -> Color(0xFFBDEBD3)
+                    else -> Color(0xFFE0E6EF)
+                },
+                RoundedCornerShape(14.dp)
+            )
+            .padding(horizontal = 11.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
+        Box(
+            Modifier
+                .size(22.dp)
+                .clip(CircleShape)
+                .background(
+                    when {
+                        isDone -> MedicalGreen
+                        isCurrent -> BrandBlue
+                        else -> Color(0xFFDDE3EC)
+                    }
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                if (isDone) "✓" else "${target.ordinal + 1}",
+                color = if (isDone || isCurrent) Color.White else Color(0xFF778196),
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+        Spacer(Modifier.width(7.dp))
         Text(
             label,
-            color = if (isDone || isCurrent) Color(0xFF0DA45D) else Color(0xFF3D3D3D),
-            fontSize = 14.sp,
+            color = when {
+                isCurrent -> BrandBlue
+                isDone -> Color(0xFF0D9B59)
+                else -> Color(0xFF626B7D)
+            },
+            fontSize = 12.sp,
             fontWeight = FontWeight.Bold
         )
     }
@@ -5792,7 +6192,13 @@ private fun WorkflowConnector(done: Boolean, modifier: Modifier = Modifier) {
     Box(
         modifier = modifier
             .height(2.dp)
-            .background(if (done) Color(0xFF0DA45D) else Color(0xFF596073))
+            .background(
+                if (done) {
+                    Brush.horizontalGradient(listOf(MedicalGreen, Color(0xFF56D4A0)))
+                } else {
+                    Brush.horizontalGradient(listOf(Color(0xFFD7DFEA), Color(0xFFB9C5D5)))
+                }
+            )
     )
 }
 
@@ -5804,7 +6210,7 @@ private fun SegmentedTinyButton(label: String, selected: Boolean, onClick: () ->
             .clip(RoundedCornerShape(14.dp))
             .background(if (selected) BrandBlue else Color.White)
             .border(1.dp, if (selected) BrandBlue else Color(0xFFD5DCE8), RoundedCornerShape(14.dp))
-            .clickable(onClick = onClick)
+            .omniClickable(shape = RoundedCornerShape(14.dp), onClick = onClick)
             .padding(horizontal = 12.dp),
         contentAlignment = Alignment.Center
     ) {
@@ -5830,7 +6236,7 @@ private fun BrainElectrodeColumn(
                         .clip(CircleShape)
                         .background(if (selected) BrandBlue else Color.White)
                         .border(1.dp, if (selected) BrandBlue else Color(0xFFD5DCE8), CircleShape)
-                        .clickable { onContactSelected(contact) },
+                        .omniClickable(shape = CircleShape) { onContactSelected(contact) },
                     contentAlignment = Alignment.Center
                 ) {
                     Text(contact, color = if (selected) Color.White else Color(0xFF596073), fontSize = 18.sp, fontWeight = FontWeight.Bold)
@@ -5888,15 +6294,35 @@ private fun BaselineTaskRow(
     Row(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .background(if (current) Color(0xFFEAF2FF) else Color.Transparent)
-            .clickable(onClick = onClick)
-            .padding(vertical = 8.dp, horizontal = 8.dp),
+            .heightIn(min = 50.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(
+                if (current) {
+                    Brush.horizontalGradient(listOf(Color(0xFFE8F3FF), Color(0xFFF6FAFF)))
+                } else {
+                    Brush.horizontalGradient(listOf(Color.Transparent, Color.Transparent))
+                }
+            )
+            .border(
+                1.dp,
+                if (current) Color(0xFFC8DFFF) else Color.Transparent,
+                RoundedCornerShape(12.dp)
+            )
+            .omniClickable(shape = RoundedCornerShape(12.dp), onClick = onClick)
+            .padding(vertical = 8.dp, horizontal = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(
             Modifier
-                .size(24.dp)
+                .width(3.dp)
+                .height(26.dp)
+                .clip(CircleShape)
+                .background(if (current) BrandBlue else Color.Transparent)
+        )
+        Spacer(Modifier.width(8.dp))
+        Box(
+            Modifier
+                .size(26.dp)
                 .clip(CircleShape)
                 .background(if (done) Color(0xFF0DA45D) else Color.White)
                 .border(1.dp, if (current) BrandBlue else Color(0xFF9AA1AD), CircleShape),
@@ -6111,8 +6537,8 @@ private fun TabletRealtimePage(
     var displayDialog by remember { mutableStateOf(false) }
     var eventDialog by remember { mutableStateOf(false) }
     if (displayDialog) {
-        AlertDialog(
-            containerColor = Color.White,
+        PremiumAlertDialog(
+            containerColor = PremiumSurfaceStrong,
             onDismissRequest = { displayDialog = false },
             title = { Text("显示设置") },
             text = {
@@ -6133,8 +6559,8 @@ private fun TabletRealtimePage(
         )
     }
     if (eventDialog) {
-        AlertDialog(
-            containerColor = Color.White,
+        PremiumAlertDialog(
+            containerColor = PremiumSurfaceStrong,
             onDismissRequest = { eventDialog = false },
             title = { Text("标记事件") },
             text = {
@@ -6287,9 +6713,29 @@ private fun DoctorPanel(
             modifier = Modifier
                 .fillMaxWidth()
                 .border(1.dp, PremiumBorder.copy(alpha = 0.9f), RoundedCornerShape(14.dp))
-                .padding(14.dp),
-            content = content
-        )
+        ) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(3.dp)
+                    .background(
+                        Brush.horizontalGradient(
+                            listOf(
+                                BrandBlue.copy(alpha = 0.88f),
+                                Color(0xFF43C7EE).copy(alpha = 0.7f),
+                                Color(0xFF8174E8).copy(alpha = 0.54f),
+                                Color.Transparent
+                            )
+                        )
+                    )
+            )
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(14.dp),
+                content = content
+            )
+        }
     }
 }
 
@@ -6336,7 +6782,7 @@ private fun DoctorSidebar(
             .padding(26.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-                Image(painterResource(R.drawable.mg_logo_mark), contentDescription = null, modifier = Modifier.size(66.dp))
+                Image(painterResource(R.drawable.mg_logo_mark_transparent), contentDescription = null, modifier = Modifier.size(66.dp))
             Spacer(Modifier.width(10.dp))
             Text("Ominidapt PD", color = BrandBlue, fontSize = 20.sp, fontWeight = FontWeight.Bold)
         }
@@ -6401,7 +6847,7 @@ private fun DoctorMenuItem(
             .height(54.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(bg)
-            .clickable { onSelected(screen) }
+            .omniClickable(shape = RoundedCornerShape(8.dp)) { onSelected(screen) }
             .padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -6420,7 +6866,7 @@ private fun CompactDoctorHeader(
 ) {
     Column(Modifier.background(PanelBg).padding(12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-                Image(painterResource(R.drawable.mg_logo_mark), contentDescription = null, modifier = Modifier.size(52.dp))
+                Image(painterResource(R.drawable.mg_logo_mark_transparent), contentDescription = null, modifier = Modifier.size(52.dp))
             Spacer(Modifier.width(8.dp))
             Text("Ominidapt PD", color = BrandBlue, fontWeight = FontWeight.Bold)
             Spacer(Modifier.weight(1f))
@@ -6684,12 +7130,22 @@ private fun WeightStepper(value: Float, modifier: Modifier = Modifier, onChange:
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(
-            Modifier.width(20.dp).fillMaxHeight().clickable { onChange((value - 0.05f).coerceIn(0.05f, 0.9f)) },
+            Modifier
+                .width(24.dp)
+                .fillMaxHeight()
+                .omniClickable(shape = RoundedCornerShape(topStart = 11.dp, bottomStart = 11.dp)) {
+                    onChange((value - 0.05f).coerceIn(0.05f, 0.9f))
+                },
             contentAlignment = Alignment.Center
         ) { Text("-", color = BrandBlue, fontSize = 10.sp) }
         Text("${(value * 100).toInt()}%", color = Ink, fontSize = 9.sp, textAlign = TextAlign.Center, modifier = Modifier.weight(1f))
         Box(
-            Modifier.width(20.dp).fillMaxHeight().clickable { onChange((value + 0.05f).coerceIn(0.05f, 0.9f)) },
+            Modifier
+                .width(24.dp)
+                .fillMaxHeight()
+                .omniClickable(shape = RoundedCornerShape(topEnd = 11.dp, bottomEnd = 11.dp)) {
+                    onChange((value + 0.05f).coerceIn(0.05f, 0.9f))
+                },
             contentAlignment = Alignment.Center
         ) { Text("+", color = BrandBlue, fontSize = 10.sp) }
     }
@@ -6755,7 +7211,6 @@ private fun CompactCardAction(
             .border(1.dp, if (filled) BrandBlue else Border, RoundedCornerShape(20.dp))
             .omniClickable(
                 shape = RoundedCornerShape(20.dp),
-                restingElevation = if (filled) 4.dp else 1.dp,
                 onClick = onClick
             ),
         contentAlignment = Alignment.Center
@@ -6776,11 +7231,23 @@ private fun OptimizationRoundsControl(rounds: Int, onDecrease: () -> Unit, onInc
         Modifier.fillMaxWidth().height(46.dp).border(1.dp, Color(0xFFE1E6EE), RoundedCornerShape(23.dp)),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(Modifier.width(30.dp).fillMaxHeight().clickable(onClick = onDecrease), contentAlignment = Alignment.Center) {
+        Box(
+            Modifier
+                .width(38.dp)
+                .fillMaxHeight()
+                .omniClickable(shape = RoundedCornerShape(topStart = 23.dp, bottomStart = 23.dp), onClick = onDecrease),
+            contentAlignment = Alignment.Center
+        ) {
             Text("-", color = BrandBlue, fontSize = 16.sp)
         }
         Text("$rounds 轮", color = Color(0xFF3D3D3D), fontSize = 14.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f), textAlign = TextAlign.Center)
-        Box(Modifier.width(30.dp).fillMaxHeight().clickable(onClick = onIncrease), contentAlignment = Alignment.Center) {
+        Box(
+            Modifier
+                .width(38.dp)
+                .fillMaxHeight()
+                .omniClickable(shape = RoundedCornerShape(topEnd = 23.dp, bottomEnd = 23.dp), onClick = onIncrease),
+            contentAlignment = Alignment.Center
+        ) {
             Text("+", color = BrandBlue, fontSize = 16.sp)
         }
     }

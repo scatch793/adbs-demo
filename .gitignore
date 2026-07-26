@@ -12,6 +12,7 @@
 /.idea/deviceManager.xml
 /.idea/AndroidProjectSystem.xml
 /.idea/.name
+/.idea/vcs.xml
 .DS_Store
 /build
 **/build/
@@ -19,3 +20,6 @@
 .externalNativeBuild
 .cxx
 local.properties
+node_modules/
+unpackage/
+.hbuilderx/
