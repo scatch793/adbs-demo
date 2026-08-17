@@ -2,7 +2,8 @@ package com.omnidapt.pd.data
 
 enum class UserRole {
     Doctor,
-    Patient
+    Patient,
+    Admin
 }
 
 enum class PatientTab {
@@ -219,11 +220,11 @@ data class ParameterOptimizationSettings(
     val sideEffectWeight: Float = 0.15f,
     val comparisonWeight: Float = 0.15f,
     val currentMin: Float = 1.0f,
-    val currentMax: Float = 4.0f,
-    val frequencyMin: Int = 80,
-    val frequencyMax: Int = 180,
-    val pulseWidthMin: Int = 40,
-    val pulseWidthMax: Int = 120,
+    val currentMax: Float = 3.0f,
+    val frequencyMin: Int = 120,
+    val frequencyMax: Int = 150,
+    val pulseWidthMin: Int = 50,
+    val pulseWidthMax: Int = 90,
     val dutyCycleMin: Int = 20,
     val dutyCycleMax: Int = 80,
     val optimizationRounds: Int = 7
