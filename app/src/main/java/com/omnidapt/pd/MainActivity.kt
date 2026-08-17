@@ -1,6 +1,8 @@
 package com.omnidapt.pd
 
 import android.os.Bundle
+import android.content.Intent
+import android.net.Uri
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -24,6 +26,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -87,6 +90,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
@@ -94,11 +98,15 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -112,6 +120,8 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.input.pointer.pointerInput
@@ -157,6 +167,24 @@ import com.omnidapt.pd.data.SymptomFeedback
 import com.omnidapt.pd.data.TelehealthSession
 import com.omnidapt.pd.data.TherapyParameters
 import com.omnidapt.pd.data.UserRole
+import com.omnidapt.pd.real.OminidaptApplication
+import com.omnidapt.pd.real.RealRepository
+import com.omnidapt.pd.real.ReminderWorker
+import com.omnidapt.pd.real.ble.BleCentralClient
+import com.omnidapt.pd.real.ble.BleLinkState
+import com.omnidapt.pd.real.ble.DeviceCommandDispatcher
+import com.omnidapt.pd.real.algorithm.EdgeInferenceController
+import com.omnidapt.pd.real.initialization.InitializationController
+import com.omnidapt.pd.real.initialization.InitializationUiState
+import com.omnidapt.pd.real.network.ApiInitialization
+import com.omnidapt.pd.real.network.ApiOptimizationTask
+import com.omnidapt.pd.real.network.OptimizationFeedbackBody
+import com.omnidapt.pd.real.ui.AdminShell
+import com.omnidapt.pd.real.ui.RealDevicePanel
+import com.omnidapt.pd.real.ui.RealDoctorShell
+import com.omnidapt.pd.real.ui.RealChatPanel
+import com.omnidapt.pd.real.ui.RealPatientShell
+import com.omnidapt.pd.real.ui.RealLoginScreen
 import com.omnidapt.pd.ui.components.AmbientBackdrop
 import com.omnidapt.pd.ui.components.AmbientStyle
 import com.omnidapt.pd.ui.components.OmniButton as Button
@@ -179,6 +207,10 @@ import com.omnidapt.pd.ui.theme.PremiumSurface
 import com.omnidapt.pd.ui.theme.PremiumSurfaceStrong
 import com.omnidapt.pd.ui.theme.SoftRed
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
+import java.util.UUID
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -186,20 +218,31 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             OminidaptTheme {
-                OminidaptApp()
+                OminidaptApp(
+                    realRepository = (application as OminidaptApplication).realRepository,
+                )
             }
         }
     }
 }
 
 @Composable
-fun OminidaptApp(repository: MockRepository = remember { MockRepository() }) {
-    var role by remember { mutableStateOf<UserRole?>(null) }
+fun OminidaptApp(
+    repository: MockRepository = remember { MockRepository() },
+    realRepository: RealRepository? = null,
+) {
+    var role by remember(realRepository) {
+        val session = realRepository?.currentSession()
+        mutableStateOf(
+            session?.takeUnless { it.mustChangePassword }?.role?.toAppRole(),
+        )
+    }
 
     val ambientStyle = when (role) {
         null -> AmbientStyle.Login
         UserRole.Patient -> AmbientStyle.Patient
         UserRole.Doctor -> AmbientStyle.Doctor
+        UserRole.Admin -> AmbientStyle.Doctor
     }
     AmbientBackdrop(style = ambientStyle, modifier = Modifier.fillMaxSize()) {
         AnimatedContent(
@@ -223,12 +266,53 @@ fun OminidaptApp(repository: MockRepository = remember { MockRepository() }) {
             label = "roleTransition"
         ) { activeRole ->
             when (activeRole) {
-                null -> LoginScreen(onLogin = { role = it })
-                UserRole.Patient -> PatientShell(repository = repository, onLogout = { role = null })
-                UserRole.Doctor -> DoctorShell(repository = repository, onLogout = { role = null })
+                null -> if (realRepository == null) {
+                    LoginScreen(onLogin = { role = it })
+                } else {
+                    RealLoginScreen(
+                        repository = realRepository,
+                        onLogin = { role = it },
+                    )
+                }
+                UserRole.Patient -> PatientShell(
+                    repository = repository,
+                    realRepository = realRepository,
+                    bleClient = realRepository?.let {
+                        (androidx.compose.ui.platform.LocalContext.current.applicationContext as OminidaptApplication).bleClient
+                    },
+                    onLogout = {
+                        realRepository?.logout()
+                        role = null
+                    },
+                )
+                UserRole.Doctor -> DoctorShell(
+                    repository = repository,
+                    realRepository = realRepository,
+                    bleClient = realRepository?.let {
+                        (androidx.compose.ui.platform.LocalContext.current.applicationContext as OminidaptApplication).bleClient
+                    },
+                    onLogout = {
+                        realRepository?.logout()
+                        role = null
+                    },
+                )
+                UserRole.Admin -> AdminShell(
+                    repository = requireNotNull(realRepository),
+                    onLogout = {
+                        realRepository.logout()
+                        role = null
+                    },
+                )
             }
         }
     }
+}
+
+private fun String.toAppRole(): UserRole? = when (lowercase()) {
+    "doctor" -> UserRole.Doctor
+    "patient" -> UserRole.Patient
+    "admin" -> UserRole.Admin
+    else -> null
 }
 
 @Composable
@@ -637,16 +721,74 @@ private fun loginTextFieldColors() = OutlinedTextFieldDefaults.colors(
 )
 
 @Composable
-private fun PatientShell(repository: MockRepository, onLogout: () -> Unit) {
+private fun PatientShell(
+    repository: MockRepository,
+    onLogout: () -> Unit,
+    realRepository: RealRepository? = null,
+    bleClient: BleCentralClient? = null,
+) {
     val patient = repository.getCurrentPatient()
+    val localContext = androidx.compose.ui.platform.LocalContext.current
+    val scope = rememberCoroutineScope()
+    var serverPatientId by remember { mutableStateOf<String?>(null) }
+    var emergencyPhone by remember { mutableStateOf<String?>(null) }
+    val edgeInference = remember(bleClient, realRepository) {
+        if (bleClient != null && realRepository != null) {
+            EdgeInferenceController(bleClient, realRepository)
+        } else {
+            null
+        }
+    }
+    val commandDispatcher = remember(bleClient, realRepository) {
+        if (bleClient != null && realRepository != null) {
+            DeviceCommandDispatcher(bleClient, realRepository)
+        } else {
+            null
+        }
+    }
     var tab by remember { mutableStateOf(PatientTab.Home) }
     var refreshKey by remember { mutableIntStateOf(0) }
     var showTuningFeedback by remember { mutableStateOf(false) }
+    var optimizationTask by remember { mutableStateOf<ApiOptimizationTask?>(null) }
+    var optimizationFeedbackLoading by remember { mutableStateOf(false) }
+    var optimizationFeedbackError by remember { mutableStateOf<String?>(null) }
     val report = remember(refreshKey) { repository.getPatientReport(patient.id) }
     val tabScrollStates = remember {
         PatientTab.entries.associateWith { ScrollState(initial = 0) }
     }
     val pageOffset = with(LocalDensity.current) { 24.dp.roundToPx() }
+    LaunchedEffect(realRepository) {
+        realRepository?.cachedPatients()?.firstOrNull()?.let {
+            serverPatientId = it.id
+            emergencyPhone = it.emergencyPhone
+        }
+    }
+    LaunchedEffect(serverPatientId, edgeInference) {
+        serverPatientId?.let {
+            edgeInference?.start(it)
+            commandDispatcher?.start(it)
+        }
+    }
+    LaunchedEffect(realRepository, serverPatientId) {
+        val patientId = serverPatientId ?: return@LaunchedEffect
+        val real = realRepository ?: return@LaunchedEffect
+        while (true) {
+            runCatching { real.optimizationTasks(patientId) }
+                .onSuccess { tasks ->
+                    optimizationTask = tasks.firstOrNull {
+                        it.status !in setOf("approved", "rejected", "failed")
+                    }
+                }
+                .onFailure { optimizationFeedbackError = it.message }
+            delay(1_000)
+        }
+    }
+    DisposableEffect(edgeInference, commandDispatcher) {
+        onDispose {
+            edgeInference?.stop()
+            commandDispatcher?.stop()
+        }
+    }
 
     Box(Modifier.fillMaxSize()) {
         Scaffold(
@@ -667,6 +809,15 @@ private fun PatientShell(repository: MockRepository, onLogout: () -> Unit) {
                     .padding(horizontal = 25.dp, vertical = 6.dp)
             ) {
                 PatientTopBar(onLogout = onLogout)
+                if (bleClient != null && tab == PatientTab.Home) {
+                    RealDevicePanel(
+                        client = bleClient,
+                        inference = edgeInference,
+                        dispatcher = commandDispatcher,
+                        repository = realRepository,
+                        patientId = serverPatientId,
+                    )
+                }
                 Spacer(Modifier.height(4.dp))
                 AnimatedContent(
                     targetState = tab,
@@ -697,18 +848,79 @@ private fun PatientShell(repository: MockRepository, onLogout: () -> Unit) {
                                 report = report,
                                 onSubmitFeedback = {
                                     repository.submitSymptomFeedback(it)
+                                    realRepository?.let { real ->
+                                        scope.launch {
+                                            real.enqueueSymptom(
+                                                patientId = serverPatientId,
+                                                tremor = it.tremor,
+                                                rigidity = it.rigidity,
+                                                speech = it.speech,
+                                                note = it.note,
+                                            )
+                                        }
+                                    }
                                     refreshKey++
                                 },
                                 onMedicationTaken = {
                                     repository.markMedicationTaken(patient.id, System.currentTimeMillis())
+                                    realRepository?.let { real ->
+                                        scope.launch {
+                                            real.enqueueMedication(serverPatientId, "taken")
+                                        }
+                                    }
                                     refreshKey++
-                                }
+                                },
+                                onMedicationSnoozed = {
+                                    ReminderWorker.schedule(localContext)
+                                    realRepository?.let { real ->
+                                        scope.launch {
+                                            real.enqueueMedication(serverPatientId, "snoozed")
+                                        }
+                                    }
+                                },
                             )
                             PatientTab.Report -> PatientReportScreen(
                                 report = report,
-                                onStartTuning = { showTuningFeedback = true }
+                                onStartTuning = {
+                                    optimizationFeedbackError = if (optimizationTask == null) {
+                                        "医生尚未创建参数优化任务"
+                                    } else {
+                                        null
+                                    }
+                                    showTuningFeedback = true
+                                }
                             )
-                            PatientTab.Telehealth -> PatientTelehealthScreen()
+                            PatientTab.Telehealth -> if (realRepository != null) {
+                                RealChatPanel(
+                                    repository = realRepository,
+                                    patientId = serverPatientId,
+                                    currentUserId = realRepository.currentSession()?.userId,
+                                    onDial = {
+                                        emergencyPhone?.let { phone ->
+                                            localContext.startActivity(
+                                                Intent(Intent.ACTION_DIAL, Uri.parse("tel:${Uri.encode(phone)}")),
+                                            )
+                                        }
+                                    },
+                                )
+                            } else {
+                                PatientTelehealthScreen(
+                                    onCallDoctor = {
+                                        emergencyPhone?.let { phone ->
+                                            localContext.startActivity(
+                                                Intent(Intent.ACTION_DIAL, Uri.parse("tel:${Uri.encode(phone)}")),
+                                            )
+                                        }
+                                    },
+                                    onEmergency = {
+                                        emergencyPhone?.let { phone ->
+                                            localContext.startActivity(
+                                                Intent(Intent.ACTION_DIAL, Uri.parse("tel:${Uri.encode(phone)}")),
+                                            )
+                                        }
+                                    },
+                                )
+                            }
                             PatientTab.Profile -> PatientProfileScreen(patient = patient, onLogout = onLogout)
                         }
                     }
@@ -734,9 +946,41 @@ private fun PatientShell(repository: MockRepository, onLogout: () -> Unit) {
                     .padding(horizontal = 16.dp),
                 contentAlignment = Alignment.Center
             ) {
-                TuningFeedbackDialog(
+                RealTuningFeedbackDialog(
+                    task = optimizationTask,
+                    loading = optimizationFeedbackLoading,
+                    externalError = optimizationFeedbackError,
                     onDismiss = { showTuningFeedback = false },
-                    onSubmit = { showTuningFeedback = false }
+                    onSubmit = { answers, sideEffects ->
+                        val task = optimizationTask
+                        val real = realRepository
+                        if (task == null || real == null) {
+                            optimizationFeedbackError = "当前没有可提交的优化任务"
+                        } else {
+                            optimizationFeedbackLoading = true
+                            optimizationFeedbackError = null
+                            scope.launch {
+                                runCatching {
+                                    real.submitOptimizationFeedback(
+                                        task.id,
+                                        OptimizationFeedbackBody(
+                                            event_id = UUID.randomUUID().toString(),
+                                            task_id = task.id,
+                                            answers = answers,
+                                            side_effects = sideEffects,
+                                            parameters = task.current_parameters,
+                                        ),
+                                    )
+                                }.onSuccess {
+                                    optimizationTask = it.task
+                                    showTuningFeedback = false
+                                }.onFailure {
+                                    optimizationFeedbackError = it.message ?: "问卷提交失败"
+                                }
+                                optimizationFeedbackLoading = false
+                            }
+                        }
+                    }
                 )
             }
         }
@@ -856,7 +1100,8 @@ private fun RowScope.PatientNavItem(
 private fun PatientHome(
     report: PatientReport,
     onSubmitFeedback: (SymptomFeedback) -> Unit,
-    onMedicationTaken: () -> Unit
+    onMedicationTaken: () -> Unit,
+    onMedicationSnoozed: () -> Unit = {},
 ) {
     var tremor by remember { mutableStateOf(report.latestFeedback.tremor.toFloat()) }
     var rigidity by remember { mutableStateOf(report.latestFeedback.rigidity.toFloat()) }
@@ -906,7 +1151,7 @@ private fun PatientHome(
             MedicationActionButton(
                 text = "稍后提醒",
                 selected = false,
-                onClick = {},
+                onClick = onMedicationSnoozed,
                 modifier = Modifier.weight(1f)
             )
         }
@@ -1352,7 +1597,10 @@ private fun RowScope.WeightedTableCell(text: String, weight: Float, bold: Boolea
 }
 
 @Composable
-private fun PatientTelehealthScreen() {
+private fun PatientTelehealthScreen(
+    onCallDoctor: () -> Unit = {},
+    onEmergency: () -> Unit = {},
+) {
     Text("联系医生", color = Color.Black, fontSize = 22.sp, fontWeight = FontWeight.Bold)
     Spacer(Modifier.height(4.dp))
     Text("与当前对接医生沟通症状和用药情况", color = Color(0xFF808593), fontSize = 13.sp, fontWeight = FontWeight.Bold)
@@ -1415,14 +1663,14 @@ private fun PatientTelehealthScreen() {
     Spacer(Modifier.height(8.dp))
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedButton(
-            onClick = {},
+            onClick = onCallDoctor,
             modifier = Modifier.weight(1f).height(35.dp),
             shape = RoundedCornerShape(18.dp)
         ) {
             Text("电话通话", color = Color(0xFF1069E3), fontSize = 14.sp, fontWeight = FontWeight.Bold)
         }
         OutlinedButton(
-            onClick = {},
+            onClick = onEmergency,
             modifier = Modifier.weight(1f).height(35.dp),
             shape = RoundedCornerShape(18.dp),
             colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFFF3B48))
@@ -1590,6 +1838,170 @@ private fun ProfileMenuRow(iconRes: Int, title: String, subtitle: String) {
                 Text(subtitle, color = Color(0xFF717789), fontSize = 14.sp, fontWeight = FontWeight.Bold)
             }
             Text("›", color = Color(0xFFA8ADB7), fontSize = 34.sp)
+        }
+    }
+}
+
+@Composable
+private fun RealTuningFeedbackDialog(
+    task: ApiOptimizationTask?,
+    loading: Boolean,
+    externalError: String?,
+    onDismiss: () -> Unit,
+    onSubmit: (Map<String, Double>, Map<String, Double>) -> Unit,
+) {
+    var tremorImproved by remember(task?.current_round) { mutableStateOf(true) }
+    var rigidImproved by remember(task?.current_round) { mutableStateOf(true) }
+    var speechImproved by remember(task?.current_round) { mutableStateOf(true) }
+    var motionImproved by remember(task?.current_round) { mutableStateOf(true) }
+    var sideEffectSeverity by remember(task?.current_round) { mutableIntStateOf(0) }
+    var score by remember(task?.current_round) { mutableIntStateOf(3) }
+    val unlocked = task?.questionnaire_unlocked == true
+
+    Card(
+        modifier = Modifier.fillMaxWidth().widthIn(max = 500.dp),
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(containerColor = PremiumSurfaceStrong),
+        elevation = CardDefaults.cardElevation(defaultElevation = 14.dp),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                "参数优化反馈问卷",
+                color = Ink,
+                fontSize = 22.sp,
+                fontWeight = FontWeight.Bold,
+            )
+            Spacer(Modifier.height(8.dp))
+            Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = BrandBlue.copy(alpha = 0.08f),
+                modifier = Modifier.border(1.dp, BrandBlue.copy(alpha = 0.35f), RoundedCornerShape(10.dp)),
+            ) {
+                Text(
+                    text = task?.let { "第 ${it.current_round} / ${it.rounds} 轮 · 当前 ${"%.2f".format(it.current_parameters["current_ma"] ?: 0.0)} mA" }
+                        ?: "等待医生创建优化任务",
+                    color = BrandBlue,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 8.dp),
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            Text(
+                when {
+                    task == null -> "当前没有可填写的问卷"
+                    unlocked -> "观察期已完成，请根据当前刺激感受填写"
+                    else -> "参数已确认，正在完成 ${task.observation_seconds} 秒观察期"
+                },
+                color = if (unlocked) MedicalGreen else MutedText,
+                fontSize = 14.sp,
+            )
+            Spacer(Modifier.height(12.dp))
+            RealTuningYesNoRow(1, "当前震颤是否改善？", tremorImproved) { tremorImproved = it }
+            RealTuningYesNoRow(2, "当前僵硬感是否改善？", rigidImproved) { rigidImproved = it }
+            RealTuningYesNoRow(3, "当前发声是否更顺畅？", speechImproved) { speechImproved = it }
+            RealTuningYesNoRow(4, "当前动作是否更流畅？", motionImproved) { motionImproved = it }
+            TuningQuestionCard(height = 84.dp) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    NumberBadge(5)
+                    Spacer(Modifier.width(14.dp))
+                    Text(
+                        "副作用严重度",
+                        color = Ink,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                    listOf(0 to "无", 3 to "轻微", 6 to "中度", 8 to "严重").forEach { (value, label) ->
+                        TogglePill(label, sideEffectSeverity == value) { sideEffectSeverity = value }
+                    }
+                }
+            }
+            TuningScoreRow(score) { score = it }
+            if (!externalError.isNullOrBlank()) {
+                Text(
+                    externalError,
+                    color = SoftRed,
+                    fontSize = 13.sp,
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                )
+            }
+            Spacer(Modifier.height(10.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                OutlinedButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.width(112.dp).heightIn(min = 44.dp),
+                    shape = RoundedCornerShape(14.dp),
+                ) {
+                    Text("稍后填写", color = MutedText, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                }
+                Spacer(Modifier.width(14.dp))
+                Button(
+                    onClick = {
+                        val binary: (Boolean) -> Double = { if (it) 10.0 else 0.0 }
+                        onSubmit(
+                            mapOf(
+                                "tremor_relief" to binary(tremorImproved),
+                                "rigidity_relief" to binary(rigidImproved),
+                                "speech_fluency" to binary(speechImproved),
+                                "movement_fluency" to binary(motionImproved),
+                                "task_ease" to score * 2.0,
+                                "parameter_preference" to score * 2.0,
+                            ),
+                            mapOf("reported_severity" to sideEffectSeverity.toDouble()),
+                        )
+                    },
+                    enabled = unlocked && !loading,
+                    modifier = Modifier.width(128.dp).heightIn(min = 44.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = BrandBlue),
+                ) {
+                    if (loading) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                            color = Color.White,
+                        )
+                    } else {
+                        Text("提交反馈", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RealTuningYesNoRow(
+    index: Int,
+    question: String,
+    yesSelected: Boolean,
+    onChange: (Boolean) -> Unit,
+) {
+    TuningQuestionCard(height = 51.dp) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            NumberBadge(index)
+            Spacer(Modifier.width(14.dp))
+            Text(
+                question,
+                color = Ink,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.weight(1f),
+            )
+            TogglePill("是", yesSelected) { onChange(true) }
+            Spacer(Modifier.width(8.dp))
+            TogglePill("否", !yesSelected) { onChange(false) }
         }
     }
 }
@@ -1801,12 +2213,28 @@ private fun TogglePill(text: String, selected: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-private fun DoctorShell(repository: MockRepository, onLogout: () -> Unit) {
-    TabletDoctorShell(repository = repository, onLogout = onLogout)
+private fun DoctorShell(
+    repository: MockRepository,
+    onLogout: () -> Unit,
+    realRepository: RealRepository? = null,
+    bleClient: BleCentralClient? = null,
+) {
+    TabletDoctorShell(
+        repository = repository,
+        onLogout = onLogout,
+        realRepository = realRepository,
+        bleClient = bleClient,
+    )
 }
 
 @Composable
-private fun TabletDoctorShell(repository: MockRepository, onLogout: () -> Unit) {
+private fun TabletDoctorShell(
+    repository: MockRepository,
+    onLogout: () -> Unit,
+    realRepository: RealRepository? = null,
+    bleClient: BleCentralClient? = null,
+) {
+    val scope = rememberCoroutineScope()
     var selected by remember { mutableStateOf(DoctorScreen.PatientList) }
     var selectedPatientId by remember { mutableStateOf<String?>(null) }
     var viewedPatientId by remember { mutableStateOf<String?>(null) }
@@ -1814,6 +2242,21 @@ private fun TabletDoctorShell(repository: MockRepository, onLogout: () -> Unit) 
     var refreshKey by remember { mutableIntStateOf(0) }
     var deviceState by remember { mutableStateOf(repository.getDeviceState()) }
     var appMessage by remember { mutableStateOf<String?>(null) }
+    var serverPatientId by remember { mutableStateOf<String?>(null) }
+    val bleSnapshot = bleClient?.snapshot?.collectAsState()?.value
+    val initialization = remember(realRepository, bleClient) {
+        if (realRepository != null && bleClient != null) {
+            InitializationController(bleClient, realRepository)
+        } else {
+            null
+        }
+    }
+    val edgeInference = remember(realRepository, bleClient) {
+        if (realRepository != null && bleClient != null) EdgeInferenceController(bleClient, realRepository) else null
+    }
+    val commandDispatcher = remember(realRepository, bleClient) {
+        if (realRepository != null && bleClient != null) DeviceCommandDispatcher(bleClient, realRepository) else null
+    }
     val selectedPatientRecord = remember(listVersion, selectedPatientId) {
         selectedPatientId?.let { repository.getDoctorPatient(it) }
     }
@@ -1823,6 +2266,50 @@ private fun TabletDoctorShell(repository: MockRepository, onLogout: () -> Unit) 
     val selectedPatient = remember(selectedPatientRecord) { selectedPatientRecord?.toPatient() }
     val report = remember(refreshKey, selectedPatient?.id) {
         selectedPatient?.let { repository.getPatientReport(it.id) }
+    }
+    LaunchedEffect(realRepository, selectedPatientRecord?.number) {
+        if (realRepository != null) {
+            runCatching { realRepository.refreshPatients() }
+            val cached = realRepository.cachedPatients()
+            repository.replaceDoctorPatients(
+                cached.map {
+                    DoctorPatientRecord(
+                        id = it.id,
+                        name = it.name.ifBlank { it.code },
+                        gender = it.gender.ifBlank { "未填写" },
+                        age = it.age ?: 0,
+                        number = it.code,
+                        implantDate = it.implantDate ?: "未填写",
+                        summary = it.summary,
+                        group = PatientListGroup.PendingInitialization,
+                    )
+                },
+            )
+            listVersion++
+            serverPatientId = cached.firstOrNull {
+                it.code == selectedPatientRecord?.number || it.code == selectedPatientRecord?.name
+            }?.id ?: cached.firstOrNull()?.id
+            serverPatientId?.let { initialization?.loadLatest(it) }
+        }
+    }
+    LaunchedEffect(bleSnapshot?.linkState) {
+        if (bleClient != null) {
+            deviceState = if (bleSnapshot?.linkState == BleLinkState.CONNECTED) {
+                DeviceConnectionState.Connected
+            } else {
+                DeviceConnectionState.Disconnected
+            }
+        }
+    }
+    DisposableEffect(serverPatientId, edgeInference, commandDispatcher) {
+        serverPatientId?.let {
+            edgeInference?.start(it)
+            commandDispatcher?.start(it)
+        }
+        onDispose {
+            edgeInference?.stop()
+            commandDispatcher?.stop()
+        }
     }
     LaunchedEffect(appMessage) {
         if (appMessage != null) {
@@ -1871,12 +2358,22 @@ private fun TabletDoctorShell(repository: MockRepository, onLogout: () -> Unit) 
                     }
                 },
                 onConnectDevice = {
-                    deviceState = repository.connectDevice()
-                    appMessage = "设备连接成功，实时监测链路已就绪"
+                    if (bleClient != null) {
+                        bleClient.connect()
+                        appMessage = "正在扫描电脑科研模拟设备"
+                    } else {
+                        deviceState = repository.connectDevice()
+                        appMessage = "设备连接成功"
+                    }
                 },
                 onDisconnectDevice = {
-                    deviceState = repository.disconnectDevice()
-                    appMessage = "设备已断开，实时监测入口将保留模拟数据"
+                    if (bleClient != null) {
+                        bleClient.disconnect()
+                        appMessage = "电脑科研模拟设备已断开"
+                    } else {
+                        deviceState = repository.disconnectDevice()
+                        appMessage = "设备已断开"
+                    }
                 },
                 onOpenSettings = {
                     selected = DoctorScreen.Settings
@@ -1931,6 +2428,12 @@ private fun TabletDoctorShell(repository: MockRepository, onLogout: () -> Unit) 
                     deviceState = next
                     refreshKey++
                 },
+                realRepository = realRepository,
+                bleClient = bleClient,
+                initialization = initialization,
+                edgeInference = edgeInference,
+                commandDispatcher = commandDispatcher,
+                serverPatientId = serverPatientId,
                 showMessage = { appMessage = it }
             )
         }
@@ -2326,6 +2829,12 @@ private fun TabletDoctorContent(
     onPatientsChanged: () -> Unit,
     onParametersChanged: () -> Unit,
     onDeviceStateChanged: (DeviceConnectionState) -> Unit,
+    realRepository: RealRepository? = null,
+    bleClient: BleCentralClient? = null,
+    initialization: InitializationController? = null,
+    edgeInference: EdgeInferenceController? = null,
+    commandDispatcher: DeviceCommandDispatcher? = null,
+    serverPatientId: String? = null,
     showMessage: (String) -> Unit
 ) {
     val screenOffset = with(LocalDensity.current) { 18.dp.roundToPx() }
@@ -2385,6 +2894,8 @@ private fun TabletDoctorContent(
                     compact = compact,
                     gap = gap,
                     patient = patientRecord,
+                    realRepository = realRepository,
+                    serverPatientId = serverPatientId,
                     showMessage = showMessage
                 )
             }
@@ -2406,6 +2917,11 @@ private fun TabletDoctorContent(
                     gap = gap,
                     onParametersChanged = onParametersChanged,
                     showMessage = showMessage,
+                    initialization = initialization,
+                    bleClient = bleClient,
+                    edgeInference = edgeInference,
+                    serverPatientId = serverPatientId,
+                    realRepository = realRepository,
                     modifier = Modifier.fillMaxSize()
                 )
             } else {
@@ -2413,7 +2929,18 @@ private fun TabletDoctorContent(
             }
             DoctorScreen.RealtimeMonitor -> DoctorScrollableContent(screenScrollStates.getValue(activeScreen)) {
                 if (patient != null) {
-                    TabletRealtimePage(repository, patient, compact, gap, showMessage)
+                    TabletRealtimePage(
+                        repository = repository,
+                        patient = patient,
+                        compact = compact,
+                        gap = gap,
+                        showMessage = showMessage,
+                        realRepository = realRepository,
+                        bleClient = bleClient,
+                        edgeInference = edgeInference,
+                        commandDispatcher = commandDispatcher,
+                        serverPatientId = serverPatientId,
+                    )
                 } else {
                     MissingPatientPanel()
                 }
@@ -3235,8 +3762,11 @@ private fun TabletExportPageV2(
     compact: Boolean,
     gap: Dp,
     patient: DoctorPatientRecord?,
+    realRepository: RealRepository? = null,
+    serverPatientId: String? = null,
     showMessage: (String) -> Unit
 ) {
+    val realScope = rememberCoroutineScope()
     var searchDraft by remember { mutableStateOf("") }
     var dateRange by remember { mutableStateOf(DoctorDateRange.recentThreeDays) }
     var dateMenu by remember { mutableStateOf(false) }
@@ -3268,6 +3798,29 @@ private fun TabletExportPageV2(
     }
 
     TabletPageTitle("文件导出")
+    if (realRepository != null && serverPatientId != null) {
+        DoctorPanel {
+            Text("服务器真实导出", color = Color(0xFF3D3D3D), fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            Text("从当前患者数据库生成文件并下载到应用私有 exports 目录。", color = Color(0xFF717789), fontSize = 12.sp)
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf("pdf", "csv", "mat", "edf", "eml", "zip").forEach { format ->
+                    OutlinedButton(
+                        onClick = {
+                            realScope.launch {
+                                showMessage("正在生成 ${format.uppercase()}…")
+                                realRepository.exportPatient(serverPatientId, format).fold(
+                                    onSuccess = { showMessage("真实文件已保存：${it.name}") },
+                                    onFailure = { showMessage(it.message ?: "真实文件导出失败") },
+                                )
+                            }
+                        },
+                    ) { Text(format.uppercase()) }
+                }
+            }
+        }
+        Spacer(Modifier.height(gap))
+    }
     DoctorPanel {
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.Bottom) {
             Box(Modifier.weight(1f)) {
@@ -3869,14 +4422,72 @@ private fun TabletParameterPageV3(
     gap: Dp,
     onParametersChanged: () -> Unit,
     showMessage: (String) -> Unit,
+    initialization: InitializationController? = null,
+    bleClient: BleCentralClient? = null,
+    edgeInference: EdgeInferenceController? = null,
+    serverPatientId: String? = null,
+    realRepository: RealRepository? = null,
     modifier: Modifier = Modifier
 ) {
+    val realScope = rememberCoroutineScope()
+    val realInitializationState = initialization?.state?.collectAsState()?.value
+    val liveBleSnapshot = bleClient?.snapshot?.collectAsState()?.value
+    val liveBleSamples = bleClient?.recentSamples?.collectAsState()?.value ?: ShortArray(0)
     var workflow by remember(patient.id) { mutableStateOf(repository.getInitializationWorkflow(patient.id)) }
     var selection by remember(patient.id) { mutableStateOf(workflow.electrodeSelection) }
     var stimulationParameters by remember(patient.id) { mutableStateOf(workflow.stimulationParameters) }
     var bands by remember(patient.id) { mutableStateOf(workflow.frequencyBands) }
+    var initializationMode by remember(patient.id) { mutableStateOf("demo") }
+    var measuredImpedance by remember(patient.id) {
+        mutableStateOf<com.omnidapt.protocol.ImpedanceSnapshot?>(null)
+    }
+    var impedanceLoading by remember { mutableStateOf(false) }
+    var impedanceError by remember { mutableStateOf<String?>(null) }
+    var impedanceRefreshKey by remember { mutableIntStateOf(0) }
     var showResetDialog by remember { mutableStateOf(false) }
     val workflowScrollState = remember(workflow.step) { ScrollState(0) }
+
+    LaunchedEffect(realInitializationState?.result?.id, realInitializationState?.result?.status) {
+        realInitializationState?.result?.toFrequencyBands()?.let { computed ->
+            bands = computed
+            repository.saveInitializationFrequencyBands(patient.id, computed)
+        }
+    }
+
+    LaunchedEffect(
+        selection.leftPositive,
+        selection.leftNegative,
+        selection.rightPositive,
+        selection.rightNegative,
+        liveBleSnapshot?.verifiedSimulator,
+        impedanceRefreshKey,
+    ) {
+        measuredImpedance = null
+        impedanceError = null
+        if (bleClient == null || liveBleSnapshot?.verifiedSimulator != true) return@LaunchedEffect
+        delay(300)
+        impedanceLoading = true
+        runCatching {
+            val pairs = listOf(
+                selection.leftPositive to selection.leftNegative,
+                selection.rightPositive to selection.rightNegative,
+            )
+            val sequence = bleClient.measureImpedance(pairs)
+                ?: error("无法发送阻抗测量命令")
+            val ack = withTimeout(8_000) {
+                bleClient.acknowledgements.first { it.acknowledgedSequence == sequence }
+            }
+            check(ack.success) { "模拟器拒绝阻抗测量，状态码 ${ack.statusCode}" }
+            withTimeout(8_000) {
+                bleClient.impedanceMeasurements.first { it.measurementSequence == sequence }
+            }
+        }.onSuccess {
+            measuredImpedance = it
+        }.onFailure {
+            impedanceError = it.message ?: "阻抗测量失败"
+        }
+        impedanceLoading = false
+    }
 
     if (showResetDialog) {
         PremiumAlertDialog(
@@ -3917,6 +4528,9 @@ private fun TabletParameterPageV3(
         TabletPageTitle("初始化与参数调整")
         DoctorWorkflowHeader(
             step = workflow.step,
+            initializationMode = initializationMode,
+            realStatus = realInitializationState?.phase,
+            onModeChange = { initializationMode = it },
             onPrevious = {
                 repository.previousInitialization(patient.id)
                 workflow = repository.getInitializationWorkflow(patient.id)
@@ -3963,16 +4577,43 @@ private fun TabletParameterPageV3(
                                 selection = selection,
                                 onSelectionChange = { selection = it },
                                 parameters = stimulationParameters,
-                                onParametersChange = { stimulationParameters = it }
+                                onParametersChange = { stimulationParameters = it },
+                                liveImpedance = measuredImpedance?.readings?.map {
+                                    StoredImpedancePoint(
+                                        contact = "C${it.leftContact}-C${it.rightContact}",
+                                        valueKOhm = it.kiloOhms,
+                                    )
+                                }.orEmpty(),
+                                liveImpedanceQuality = measuredImpedance?.readings
+                                    ?.associate {
+                                        "C${it.leftContact}-C${it.rightContact}" to it.qualityCode
+                                    }.orEmpty(),
+                                impedanceLoading = impedanceLoading,
+                                impedanceError = impedanceError,
+                                onRetestImpedance = { impedanceRefreshKey++ },
+                                simulatorOnline = liveBleSnapshot?.verifiedSimulator == true,
                             )
                             InitializationStep.BaselineDetection -> BaselineDetectionContentV3(
                                 state = workflow.baseline,
-                                signals = repository.observeRealtimeSignals(patient.id, workflow.baseline.elapsedSeconds),
+                                signalValues = if (liveBleSamples.size >= 4) {
+                                    liveBleSamples
+                                        .asSequence()
+                                        .filterIndexed { index, _ -> index % 2 == 0 }
+                                        .map { it.toFloat() }
+                                        .toList()
+                                } else {
+                                    repository.observeRealtimeSignals(
+                                        patient.id,
+                                        workflow.baseline.elapsedSeconds,
+                                    ).map { it.microVolt }
+                                },
+                                realState = realInitializationState,
                                 compact = compact
                             )
                             InitializationStep.FrequencyExtraction -> FrequencyExtractionContentV3(
                                 bands = bands,
                                 onBandsChange = { bands = it },
+                                realResult = realInitializationState?.result,
                                 compact = compact
                             )
                             InitializationStep.Completed -> FeedbackOptimizationContentV3(
@@ -3981,7 +4622,10 @@ private fun TabletParameterPageV3(
                                 report = report,
                                 gap = gap,
                                 onParametersChanged = onParametersChanged,
-                                showMessage = showMessage
+                                showMessage = showMessage,
+                                realRepository = realRepository,
+                                serverPatientId = serverPatientId,
+                                currentDeviceParameters = liveBleSnapshot?.parameters,
                             )
                         }
                     }
@@ -3993,13 +4637,60 @@ private fun TabletParameterPageV3(
             Spacer(Modifier.height(8.dp))
             WorkflowBottomActionBar(
                 workflow = workflow,
-                selectionValid = selection.isValid() && stimulationParameters.size == 4 && stimulationParameters.all { it.isSafe() },
+                selectionValid = selection.isValid() &&
+                    stimulationParameters.size == 4 &&
+                    stimulationParameters.all { it.isSafe() } &&
+                    (
+                        bleClient == null ||
+                            measuredImpedance?.readings?.size == 2 &&
+                            measuredImpedance!!.readings.all {
+                                it.qualityCode == 0 && it.kiloOhms in 0.2f..5.0f
+                            }
+                    ),
                 frequencyValid = bands.hasValidRanges(),
+                realState = realInitializationState,
                 onStartSampling = {
-                    workflow = repository.saveBaselineSamplingState(
-                        patient.id,
-                        workflow.baseline.copy(sampling = true, sampleEnded = false)
-                    )
+                    if (initialization != null && serverPatientId != null) {
+                        val electrodeConfig = mapOf(
+                            "leftPositive" to selection.leftPositive,
+                            "leftNegative" to selection.leftNegative,
+                            "rightPositive" to selection.rightPositive,
+                            "rightNegative" to selection.rightNegative,
+                            "stimulationParameters" to stimulationParameters.map {
+                                mapOf(
+                                    "condition" to it.condition,
+                                    "frequencyHz" to it.frequencyHz,
+                                    "amplitudeMv" to it.amplitudeMv,
+                                    "pulseWidthUs" to it.pulseWidthUs,
+                                    "dutyCycle" to it.dutyCycle,
+                                )
+                            },
+                        )
+                        realScope.launch {
+                            runCatching {
+                                initialization.run(
+                                    serverPatientId,
+                                    initializationMode,
+                                    electrodeConfig,
+                                )
+                            }.onFailure {
+                                showMessage(it.message ?: "真实初始化启动失败")
+                            }
+                        }
+                    } else {
+                        workflow = repository.saveBaselineSamplingState(
+                            patient.id,
+                            workflow.baseline.copy(sampling = true, sampleEnded = false)
+                        )
+                    }
+                },
+                onAnalyze = {
+                    if (initialization != null) {
+                        realScope.launch {
+                            runCatching { initialization.analyze() }
+                                .onFailure { showMessage(it.message ?: "模型分析失败") }
+                        }
+                    }
                 },
                 onEndSampling = {
                     workflow = repository.saveBaselineSamplingState(
@@ -4014,8 +4705,8 @@ private fun TabletParameterPageV3(
                     )
                 },
                 onUseRecommendedBands = {
-                    bands = FrequencyBands()
-                    showMessage("已采用推荐频段")
+                    bands = realInitializationState?.result?.toFrequencyBands() ?: FrequencyBands()
+                    showMessage("已采用模型计算频段")
                 },
                 onConfirm = {
                     when (workflow.step) {
@@ -4026,9 +4717,16 @@ private fun TabletParameterPageV3(
                             showMessage("电极与刺激参数已保存，进入基线状态检测")
                         }
                         InitializationStep.BaselineDetection -> {
+                            val realFinished = realInitializationState
+                                ?.result
+                                ?.status in setOf("review", "approved")
                             val baseline = workflow.baseline
-                            val completed = baseline.completedTasks + baseline.activeTask
-                            if (baseline.activeTask == 3) {
+                            val completed = if (realFinished) {
+                                setOf(0, 1, 2, 3)
+                            } else {
+                                baseline.completedTasks + baseline.activeTask
+                            }
+                            if (realFinished || baseline.activeTask == 3) {
                                 repository.saveBaselineSamplingState(
                                     patient.id,
                                     baseline.copy(
@@ -4055,10 +4753,28 @@ private fun TabletParameterPageV3(
                             }
                         }
                         InitializationStep.FrequencyExtraction -> {
-                            repository.saveInitializationFrequencyBands(patient.id, bands)
-                            repository.advanceInitialization(patient.id)
-                            workflow = repository.getInitializationWorkflow(patient.id)
-                            showMessage("频段结果已保存，进入反馈优化")
+                            val resultStatus = realInitializationState?.result?.status
+                            if (initialization != null && resultStatus == "review") {
+                                realScope.launch {
+                                    runCatching { initialization.approve() }.fold(
+                                        onSuccess = {
+                                            repository.saveInitializationFrequencyBands(patient.id, bands)
+                                            repository.advanceInitialization(patient.id)
+                                            workflow = repository.getInitializationWorkflow(patient.id)
+                                            serverPatientId?.let { edgeInference?.start(it) }
+                                            showMessage("模型已审核启用，频段结果已保存")
+                                        },
+                                        onFailure = {
+                                            showMessage(it.message ?: "模型审核失败")
+                                        },
+                                    )
+                                }
+                            } else {
+                                repository.saveInitializationFrequencyBands(patient.id, bands)
+                                repository.advanceInitialization(patient.id)
+                                workflow = repository.getInitializationWorkflow(patient.id)
+                                showMessage("频段结果已保存，进入反馈优化")
+                            }
                         }
                         InitializationStep.Completed -> Unit
                     }
@@ -4071,6 +4787,9 @@ private fun TabletParameterPageV3(
 @Composable
 private fun DoctorWorkflowHeader(
     step: InitializationStep,
+    initializationMode: String,
+    realStatus: String?,
+    onModeChange: (String) -> Unit,
     onPrevious: () -> Unit,
     onReset: () -> Unit
 ) {
@@ -4102,6 +4821,72 @@ private fun DoctorWorkflowHeader(
                 }
             }
         }
+        Spacer(Modifier.height(10.dp))
+        HorizontalDivider(color = Color(0xFFE8ECF2))
+        Spacer(Modifier.height(10.dp))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                "采集模式",
+                color = Color(0xFF4B5363),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+            )
+            InitializationModeOption(
+                label = "演示  30秒/状态",
+                selected = initializationMode == "demo",
+                enabled = step == InitializationStep.ElectrodeConfig,
+                onClick = { onModeChange("demo") },
+            )
+            InitializationModeOption(
+                label = "科研  3分钟/状态",
+                selected = initializationMode == "research",
+                enabled = step == InitializationStep.ElectrodeConfig,
+                onClick = { onModeChange("research") },
+            )
+            Spacer(Modifier.weight(1f))
+            Text(
+                realStatus ?: if (step == InitializationStep.ElectrodeConfig) {
+                    "配置完成后进入四状态真实采集"
+                } else {
+                    step.displayLabel()
+                },
+                color = if (realStatus?.contains("中止") == true) SoftRed else Color(0xFF717789),
+                fontSize = 11.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+@Composable
+private fun InitializationModeOption(
+    label: String,
+    selected: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(enabled = enabled, onClick = onClick),
+        shape = RoundedCornerShape(12.dp),
+        color = if (selected) Color(0xFFE7F0FF) else Color.Transparent,
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            if (selected) BrandBlue else Color(0xFFDCE5F1),
+        ),
+    ) {
+        Text(
+            label,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+            color = if (selected) BrandBlue else Color(0xFF717789),
+            fontSize = 11.sp,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+        )
     }
 }
 
@@ -4135,7 +4920,13 @@ private fun ElectrodeConfigurationContentV3(
     selection: ElectrodeSelection,
     onSelectionChange: (ElectrodeSelection) -> Unit,
     parameters: List<StoredStimulationParameter>,
-    onParametersChange: (List<StoredStimulationParameter>) -> Unit
+    onParametersChange: (List<StoredStimulationParameter>) -> Unit,
+    liveImpedance: List<StoredImpedancePoint> = emptyList(),
+    liveImpedanceQuality: Map<String, Int> = emptyMap(),
+    impedanceLoading: Boolean = false,
+    impedanceError: String? = null,
+    onRetestImpedance: () -> Unit = {},
+    simulatorOnline: Boolean = false,
 ) {
     BoxWithConstraints {
         val stacked = maxWidth < 760.dp
@@ -4179,31 +4970,66 @@ private fun ElectrodeConfigurationContentV3(
         val impedance: @Composable () -> Unit = {
             DoctorPanel(modifier = Modifier.height(if (stacked) 470.dp else 405.dp)) {
                 ResourceSectionTitle("阻抗测试", R.drawable.doctor_section_impedance)
-                Text("阻抗单位 kΩ；图表数据由 MockRepository 接口提供，可直接替换为设备输入。", color = Color(0xFF717789), fontSize = 11.sp)
+                Text(
+                    if (impedanceLoading) {
+                        "正在向 SIM-PC-P001 注入测试电流并等待测量结果…"
+                    } else if (simulatorOnline && liveImpedance.isNotEmpty()) {
+                        "当前所选左右电极对的实测模拟阻抗，单位 kΩ。"
+                    } else {
+                        "等待连接科研模拟设备并读取阻抗。"
+                    },
+                    color = Color(0xFF717789),
+                    fontSize = 11.sp,
+                )
                 Spacer(Modifier.height(6.dp))
-                if (stacked) {
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            ImpedanceMiniChart("左脑 · 单极", repository.getImpedanceSeries(patientId, ImpedanceSide.Left, ImpedanceMode.Monopolar), Modifier.weight(1f))
-                            ImpedanceMiniChart("右脑 · 单极", repository.getImpedanceSeries(patientId, ImpedanceSide.Right, ImpedanceMode.Monopolar), Modifier.weight(1f))
+                if (impedanceLoading) {
+                    Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            CircularProgressIndicator(color = BrandBlue, modifier = Modifier.size(36.dp))
+                            Spacer(Modifier.height(10.dp))
+                            Text("阻抗测量中", color = BrandBlue, fontSize = 13.sp)
                         }
-                        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            ImpedanceMiniChart("左脑 · 双极", repository.getImpedanceSeries(patientId, ImpedanceSide.Left, ImpedanceMode.Bipolar), Modifier.weight(1f))
-                            ImpedanceMiniChart("右脑 · 双极", repository.getImpedanceSeries(patientId, ImpedanceSide.Right, ImpedanceMode.Bipolar), Modifier.weight(1f))
+                    }
+                } else if (liveImpedance.isNotEmpty()) {
+                    Row(
+                        Modifier.weight(1f),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        liveImpedance.take(2).forEachIndexed { index, reading ->
+                            ImpedanceMiniChart(
+                                if (index == 0) "左侧 · ${reading.contact}" else "右侧 · ${reading.contact}",
+                                listOf(reading),
+                                Modifier.weight(1f),
+                            )
                         }
+                    }
+                    liveImpedance.forEach { reading ->
+                        val quality = liveImpedanceQuality[reading.contact] ?: 4
+                        Text(
+                            "${reading.contact}  ${"%.2f".format(reading.valueKOhm)} kΩ · ${
+                                when (quality) {
+                                    0 -> "良好"
+                                    1 -> "接触不良"
+                                    2 -> "开路"
+                                    3 -> "短路"
+                                    else -> "未知"
+                                }
+                            }",
+                            color = if (quality == 0 && reading.valueKOhm in 0.2f..5f) MedicalGreen else SoftRed,
+                            fontSize = 11.sp,
+                        )
                     }
                 } else {
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            ImpedanceMiniChart("左脑 · 单极", repository.getImpedanceSeries(patientId, ImpedanceSide.Left, ImpedanceMode.Monopolar), Modifier.weight(1f))
-                            ImpedanceMiniChart("右脑 · 单极", repository.getImpedanceSeries(patientId, ImpedanceSide.Right, ImpedanceMode.Monopolar), Modifier.weight(1f))
-                        }
-                        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            ImpedanceMiniChart("左脑 · 双极", repository.getImpedanceSeries(patientId, ImpedanceSide.Left, ImpedanceMode.Bipolar), Modifier.weight(1f))
-                            ImpedanceMiniChart("右脑 · 双极", repository.getImpedanceSeries(patientId, ImpedanceSide.Right, ImpedanceMode.Bipolar), Modifier.weight(1f))
-                        }
+                    Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                        Text("未收到阻抗数据", color = Color(0xFF9AA1AD), fontSize = 13.sp)
                     }
                 }
+                impedanceError?.let { Text(it, color = SoftRed, fontSize = 11.sp) }
+                OutlinedButton(
+                    onClick = onRetestImpedance,
+                    enabled = simulatorOnline && !impedanceLoading,
+                    modifier = Modifier.align(Alignment.End).height(36.dp),
+                ) { Text("重新测试当前电极对", fontSize = 11.sp) }
             }
         }
         if (stacked) {
@@ -4519,10 +5345,22 @@ private fun StimValueFieldV3(value: String, modifier: Modifier, onValueChange: (
 @Composable
 private fun BaselineDetectionContentV3(
     state: BaselineSamplingState,
-    signals: List<BrainSignalPoint>,
+    signalValues: List<Float>,
+    realState: InitializationUiState?,
     compact: Boolean
 ) {
     val tasks = listOf("药物失效-静息状态", "药物失效-运动状态", "药物生效-静息状态", "药物生效-运动状态")
+    val stateLabels = listOf("OFF-Rest", "OFF-Move", "ON-Rest", "ON-Move")
+    val realTask = realState?.stateLabel?.let(stateLabels::indexOf)?.takeIf { it >= 0 }
+    val activeTask = realTask ?: state.activeTask
+    val realCompleted = realState?.result?.segments
+        ?.filter { it.accepted }
+        ?.mapNotNull { segment -> stateLabels.indexOf(segment.state_label).takeIf { it >= 0 } }
+        ?.toSet()
+        .orEmpty()
+    val completedTasks = if (realState != null) realCompleted else state.completedTasks
+    val realSampling = realState?.running == true && realState.phase.contains("采集")
+    val sampling = if (realState != null) realSampling else state.sampling
     BoxWithConstraints {
         val stacked = maxWidth < 720.dp
         val taskPanel: @Composable () -> Unit = {
@@ -4533,9 +5371,9 @@ private fun BaselineDetectionContentV3(
                 tasks.forEachIndexed { index, label ->
                     BaselineTaskRow(
                         number = index + 1,
-                        label = if (index == state.activeTask) "$label（当前步骤）" else label,
-                        done = index in state.completedTasks,
-                        current = index == state.activeTask,
+                        label = if (index == activeTask) "$label（当前步骤）" else label,
+                        done = index in completedTasks,
+                        current = index == activeTask,
                         onClick = {}
                     )
                 }
@@ -4544,11 +5382,11 @@ private fun BaselineDetectionContentV3(
         val guidePanel: @Composable () -> Unit = {
             DoctorPanel(modifier = Modifier.height(340.dp)) {
                 SectionTitle("测试内容", Icons.Filled.Info)
-                Text(baselineInstruction(state.activeTask), color = Color(0xFF3D3D3D), fontSize = 14.sp)
+                Text(baselineInstruction(activeTask), color = Color(0xFF3D3D3D), fontSize = 14.sp)
                 Spacer(Modifier.height(6.dp))
-                Text(if (state.activeTask % 2 == 1) "示例动作：" else "静息采集要求：", color = Color(0xFF3D3D3D), fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                Text(if (activeTask % 2 == 1) "示例动作：" else "静息采集要求：", color = Color(0xFF3D3D3D), fontSize = 14.sp, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(6.dp))
-                if (state.activeTask % 2 == 1) {
+                if (activeTask % 2 == 1) {
                     Image(
                         painterResource(R.drawable.doctor_baseline_motion),
                         contentDescription = "坐站运动示例",
@@ -4559,7 +5397,7 @@ private fun BaselineDetectionContentV3(
                     RestStateGuideCard(Modifier.fillMaxWidth().height(130.dp))
                 }
                 Text(
-                    if (state.activeTask < 2) "请在服药前 OFF 期完成采样。" else "请确认服药后已稳定 20-30 分钟。",
+                    if (activeTask < 2) "模拟器处于服药前 OFF 场景。" else "模拟器处于服药后 ON 场景。",
                     color = Color(0xFF5F687B),
                     fontSize = 12.sp
                 )
@@ -4583,13 +5421,49 @@ private fun BaselineDetectionContentV3(
             SectionTitle("数据观察", Icons.AutoMirrored.Filled.ShowChart)
             Spacer(Modifier.weight(1f))
             Text(
-                "EEG001(4+,1-)  ${if (state.sampling) "正在采样" else if (state.sampleEnded) "等待确认" else "已记录 ${state.elapsedSeconds}s"}",
+                "SIM-PC-P001  ${
+                    when {
+                        realState?.running == true -> "${realState.phase} · ${realState.stateLabel.orEmpty()}"
+                        realState?.result?.status == "review" -> "四状态采集完成，等待频段审核"
+                        realState?.result?.status == "approved" -> "模型已审核启用"
+                        sampling -> "正在采样"
+                        state.sampleEnded -> "等待确认"
+                        else -> "等待开始"
+                    }
+                }",
                 color = Color(0xFF686F82),
                 fontSize = 12.sp
             )
         }
+        if (realState?.targetSamples ?: 0 > 0) {
+            val progress = realState!!.collectedSamples.toFloat() / realState.targetSamples
+            Spacer(Modifier.height(8.dp))
+            LinearProgressIndicator(
+                progress = { progress.coerceIn(0f, 1f) },
+                modifier = Modifier.fillMaxWidth(),
+                color = BrandBlue,
+            )
+            Text(
+                "${realState.collectedSamples}/${realState.targetSamples} 样本/通道 · 剩余 ${realState.remainingSeconds} 秒",
+                color = Color(0xFF717789),
+                fontSize = 11.sp,
+            )
+        } else if (realState?.running == true && realState.result?.status == "analyzing") {
+            Spacer(Modifier.height(8.dp))
+            LinearProgressIndicator(
+                progress = { (realState.result.progress_percent / 100f).coerceIn(0f, 1f) },
+                modifier = Modifier.fillMaxWidth(),
+                color = BrandBlue,
+            )
+            Text(
+                "${realState.phase} · ${realState.result.progress_percent}%",
+                color = BrandBlue,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+            )
+        }
         AxisLineChart(
-            values = signals.map { it.microVolt },
+            values = signalValues,
             color = Color(0xFFFFA31A),
             min = -50f,
             max = 50f,
@@ -4603,26 +5477,48 @@ private fun BaselineDetectionContentV3(
 private fun FrequencyExtractionContentV3(
     bands: FrequencyBands,
     onBandsChange: (FrequencyBands) -> Unit,
+    realResult: ApiInitialization?,
     compact: Boolean
 ) {
+    val medicationFisher = realResult?.frequency_results
+        ?.floatList("fisher_medication_beta")
+        .orEmpty()
+    val movementFisher = realResult?.frequency_results
+        ?.floatList("fisher_movement_beta")
+        .orEmpty()
+    val gammaFisher = realResult?.frequency_results
+        ?.floatList("fisher_movement_gamma")
+        .orEmpty()
     BoxWithConstraints {
         val stacked = maxWidth < 720.dp
         if (stacked) {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                FrequencyChartPanel("β频段提取可视化", "低 β 对应药效，高 β 对应运动意图。", Modifier.height(280.dp)) { BetaBandChart(Modifier.fillMaxSize()) }
-                FrequencyChartPanel("样本分布可视化", "聚合 OFF/ON 与静息/运动样本。", Modifier.height(280.dp)) { SampleDistributionChart(Modifier.fillMaxSize()) }
-                FrequencyChartPanel("γ频段提取可视化", "高频运动与发声行为特征。", Modifier.height(260.dp)) { GammaBandChart(Modifier.fillMaxSize()) }
-                FrequencyResultPanelV3(bands, onBandsChange, Modifier.height(260.dp))
+                FrequencyChartPanel("β频段提取可视化", "真实 Fisher 曲线：橙色药物效应，蓝色运动效应。", Modifier.height(280.dp)) {
+                    BetaBandChart(medicationFisher, movementFisher, bands.staticBeta, bands.motionBeta, Modifier.fillMaxSize())
+                }
+                FrequencyChartPanel("样本分布可视化", "四种状态的实际有效采样量。", Modifier.height(280.dp)) {
+                    SampleDistributionChart(realResult, Modifier.fillMaxSize())
+                }
+                FrequencyChartPanel("γ频段提取可视化", "运动 Fisher 峰半高连续区间。", Modifier.height(260.dp)) {
+                    GammaBandChart(gammaFisher, bands.gamma, Modifier.fillMaxSize())
+                }
+                FrequencyResultPanelV3(bands, onBandsChange, realResult, Modifier.height(280.dp))
             }
         } else {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    FrequencyChartPanel("β频段提取可视化", "低 β 对应药效，高 β 对应运动意图。", Modifier.weight(1.25f).height(255.dp)) { BetaBandChart(Modifier.fillMaxSize()) }
-                    FrequencyChartPanel("样本分布可视化", "聚合 OFF/ON 与静息/运动样本。", Modifier.weight(1f).height(255.dp)) { SampleDistributionChart(Modifier.fillMaxSize()) }
+                    FrequencyChartPanel("β频段提取可视化", "真实 Fisher 曲线：橙色药物效应，蓝色运动效应。", Modifier.weight(1.25f).height(255.dp)) {
+                        BetaBandChart(medicationFisher, movementFisher, bands.staticBeta, bands.motionBeta, Modifier.fillMaxSize())
+                    }
+                    FrequencyChartPanel("样本分布可视化", "四种状态的实际有效采样量。", Modifier.weight(1f).height(255.dp)) {
+                        SampleDistributionChart(realResult, Modifier.fillMaxSize())
+                    }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    FrequencyChartPanel("γ频段提取可视化", "高频运动与发声行为特征。", Modifier.weight(1.25f).height(225.dp)) { GammaBandChart(Modifier.fillMaxSize()) }
-                    FrequencyResultPanelV3(bands, onBandsChange, Modifier.weight(1f).height(225.dp))
+                    FrequencyChartPanel("γ频段提取可视化", "运动 Fisher 峰半高连续区间。", Modifier.weight(1.25f).height(225.dp)) {
+                        GammaBandChart(gammaFisher, bands.gamma, Modifier.fillMaxSize())
+                    }
+                    FrequencyResultPanelV3(bands, onBandsChange, realResult, Modifier.weight(1f).height(225.dp))
                 }
             }
         }
@@ -4664,25 +5560,47 @@ private fun FrequencyChartPanel(
 private fun FrequencyResultPanelV3(
     bands: FrequencyBands,
     onBandsChange: (FrequencyBands) -> Unit,
+    realResult: ApiInitialization?,
     modifier: Modifier
 ) {
     DoctorPanel(modifier) {
         ResourceSectionTitle("频段提取结果", R.drawable.doctor_section_frequency_result)
-        FrequencyBandInputV3("β-药物敏感频段", bands.staticBeta) { onBandsChange(bands.copy(staticBeta = it)) }
-        FrequencyBandInputV3("β-运动敏感频段", bands.motionBeta) { onBandsChange(bands.copy(motionBeta = it)) }
-        FrequencyBandInputV3("γ-运动敏感频段", bands.gamma) { onBandsChange(bands.copy(gamma = it)) }
+        val computed = realResult != null
+        FrequencyBandInputV3("β-药物敏感频段", bands.staticBeta, !computed) { onBandsChange(bands.copy(staticBeta = it)) }
+        FrequencyBandInputV3("β-运动敏感频段", bands.motionBeta, !computed) { onBandsChange(bands.copy(motionBeta = it)) }
+        FrequencyBandInputV3("γ-运动敏感频段", bands.gamma, !computed) { onBandsChange(bands.copy(gamma = it)) }
+        realResult?.let { result ->
+            val metrics = result.quality_summary["metrics"] as? Map<*, *>
+            Text(
+                "状态：${if (result.status == "review") "等待医生审核" else result.status} · " +
+                    "准确率 ${metrics?.get("accuracy").asPercent()} · " +
+                    "Macro-F1 ${metrics?.get("macro_f1").asPercent()}",
+                color = if (result.status == "review") BrandBlue else MedicalGreen,
+                fontSize = 10.sp,
+            )
+        }
         Spacer(Modifier.weight(1f))
-        Text("可采用推荐值，也可手动输入后在页面底部确认。", color = Color(0xFF8A91A0), fontSize = 10.sp)
+        Text(
+            if (computed) "频段来自本次四状态数据与 Fisher 分析，审核后启用。" else "尚无真实分析结果。",
+            color = Color(0xFF8A91A0),
+            fontSize = 10.sp,
+        )
     }
 }
 
 @Composable
-private fun FrequencyBandInputV3(label: String, value: String, onValueChange: (String) -> Unit) {
+private fun FrequencyBandInputV3(
+    label: String,
+    value: String,
+    enabled: Boolean = true,
+    onValueChange: (String) -> Unit,
+) {
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 3.dp)) {
         Text(label, color = Color(0xFF4B5363), fontSize = 11.sp, modifier = Modifier.weight(1f))
         OutlinedTextField(
             value = value,
             onValueChange = onValueChange,
+            enabled = enabled,
             singleLine = true,
             textStyle = androidx.compose.ui.text.TextStyle(fontSize = 11.sp),
             modifier = Modifier.width(145.dp).height(46.dp),
@@ -4703,7 +5621,9 @@ private fun WorkflowBottomActionBar(
     workflow: InitializationWorkflowState,
     selectionValid: Boolean,
     frequencyValid: Boolean,
+    realState: InitializationUiState? = null,
     onStartSampling: () -> Unit,
+    onAnalyze: () -> Unit,
     onEndSampling: () -> Unit,
     onPauseSampling: () -> Unit,
     onUseRecommendedBands: () -> Unit,
@@ -4741,47 +5661,110 @@ private fun WorkflowBottomActionBar(
                 }
                 InitializationStep.BaselineDetection -> {
                     val state = workflow.baseline
-                    Button(
-                        onClick = onStartSampling,
-                        enabled = !state.sampling && !state.sampleEnded,
-                        modifier = Modifier.height(44.dp),
-                        shape = RoundedCornerShape(14.dp)
-                    ) {
-                        Text(if (state.elapsedSeconds > 0) "继续采样" else "开始采样", fontSize = 12.sp)
+                    if (realState != null) {
+                        val analyzed = realState.result?.status in setOf("review", "approved")
+                        val completed = realState.result?.segments?.count { it.accepted } ?: 0
+                        if (completed < 4) {
+                            Button(
+                                onClick = onStartSampling,
+                                enabled = !realState.running && !analyzed,
+                                modifier = Modifier.height(44.dp),
+                                shape = RoundedCornerShape(14.dp),
+                            ) {
+                                Text(
+                                    if (completed == 0) "准备并采集第1状态" else "确认并采集下一状态",
+                                    fontSize = 12.sp,
+                                )
+                            }
+                        } else if (!analyzed) {
+                            Button(
+                                onClick = onAnalyze,
+                                enabled = !realState.running,
+                                modifier = Modifier.height(44.dp),
+                                shape = RoundedCornerShape(14.dp),
+                            ) { Text("启动个体化频段与模型计算", fontSize = 12.sp) }
+                        }
+                        Spacer(Modifier.width(6.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                realState.phase,
+                                color = if (realState.error == null) Color(0xFF4B5363) else SoftRed,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                            )
+                            Text(
+                                realState.error ?: realState.stateLabel.orEmpty(),
+                                color = Color(0xFF717789),
+                                fontSize = 10.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        Button(
+                            onClick = onConfirm,
+                            enabled = analyzed,
+                            modifier = Modifier.width(190.dp).height(44.dp),
+                            shape = RoundedCornerShape(14.dp),
+                        ) { Text("进入频段提取", fontSize = 12.sp) }
+                    } else {
+                        Button(
+                            onClick = onStartSampling,
+                            enabled = !state.sampling && !state.sampleEnded,
+                            modifier = Modifier.height(44.dp),
+                            shape = RoundedCornerShape(14.dp)
+                        ) {
+                            Text(if (state.elapsedSeconds > 0) "继续采样" else "开始采样", fontSize = 12.sp)
+                        }
+                        OutlinedButton(
+                            onClick = onPauseSampling,
+                            enabled = state.sampling,
+                            modifier = Modifier.height(44.dp),
+                            shape = RoundedCornerShape(14.dp)
+                        ) { Text("暂停采样", fontSize = 12.sp) }
+                        OutlinedButton(
+                            onClick = onEndSampling,
+                            enabled = state.sampling,
+                            modifier = Modifier.height(44.dp),
+                            shape = RoundedCornerShape(14.dp)
+                        ) { Text("结束采样", fontSize = 12.sp) }
+                        Spacer(Modifier.weight(1f))
+                        Text("第 ${state.activeTask + 1}/4 步  ·  ${state.elapsedSeconds}s", color = Color(0xFF717789), fontSize = 12.sp)
+                        Button(
+                            onClick = onConfirm,
+                            enabled = state.sampleEnded,
+                            modifier = Modifier.width(190.dp).height(44.dp),
+                            shape = RoundedCornerShape(14.dp)
+                        ) { Text(if (state.activeTask == 3) "确认并进入频段提取" else "确认本步", fontSize = 12.sp) }
                     }
-                    OutlinedButton(
-                        onClick = onPauseSampling,
-                        enabled = state.sampling,
-                        modifier = Modifier.height(44.dp),
-                        shape = RoundedCornerShape(14.dp)
-                    ) { Text("暂停采样", fontSize = 12.sp) }
-                    OutlinedButton(
-                        onClick = onEndSampling,
-                        enabled = state.sampling,
-                        modifier = Modifier.height(44.dp),
-                        shape = RoundedCornerShape(14.dp)
-                    ) { Text("结束采样", fontSize = 12.sp) }
-                    Spacer(Modifier.weight(1f))
-                    Text("第 ${state.activeTask + 1}/4 步  ·  ${state.elapsedSeconds}s", color = Color(0xFF717789), fontSize = 12.sp)
-                    Button(
-                        onClick = onConfirm,
-                        enabled = state.sampleEnded,
-                        modifier = Modifier.width(190.dp).height(44.dp),
-                        shape = RoundedCornerShape(14.dp)
-                    ) { Text(if (state.activeTask == 3) "确认并进入频段提取" else "确认本步", fontSize = 12.sp) }
                 }
                 InitializationStep.FrequencyExtraction -> {
                     OutlinedButton(onClick = onUseRecommendedBands, modifier = Modifier.height(44.dp), shape = RoundedCornerShape(14.dp)) {
                         Text("采用推荐参数", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     }
                     Spacer(Modifier.weight(1f))
-                    Text("确认后保存至当前患者初始化档案", color = Color(0xFF717789), fontSize = 12.sp)
+                    Text(
+                        if (realState?.result?.status == "review") {
+                            "审核后模型才会成为患者当前模型"
+                        } else {
+                            "确认后保存至当前患者初始化档案"
+                        },
+                        color = Color(0xFF717789),
+                        fontSize = 12.sp,
+                    )
                     Button(
                         onClick = onConfirm,
-                        enabled = frequencyValid,
+                        enabled = frequencyValid && (
+                            realState == null || realState.result?.status in setOf("review", "approved")
+                        ),
                         modifier = Modifier.width(230.dp).height(46.dp),
                         shape = RoundedCornerShape(14.dp)
-                    ) { Text("确认并保存频段结果", fontSize = 13.sp, fontWeight = FontWeight.Bold) }
+                    ) {
+                        Text(
+                            if (realState?.result?.status == "review") "审核并启用该模型" else "确认并保存频段结果",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
                 }
                 InitializationStep.Completed -> Unit
             }
@@ -4805,6 +5788,29 @@ private fun FrequencyBands.hasValidRanges(): Boolean =
         bounds.size == 2 && bounds[0] != null && bounds[1] != null && bounds[0]!! < bounds[1]!!
     }
 
+private fun ApiInitialization.toFrequencyBands(): FrequencyBands? {
+    val values = frequency_results["bands"] as? Map<*, *> ?: return null
+    fun band(key: String): String? {
+        val range = values[key] as? List<*> ?: return null
+        val lower = (range.getOrNull(0) as? Number)?.toDouble() ?: return null
+        val upper = (range.getOrNull(1) as? Number)?.toDouble() ?: return null
+        return "%.1f-%.1f Hz".format(lower, upper)
+    }
+    return FrequencyBands(
+        staticBeta = band("medication_beta") ?: return null,
+        motionBeta = band("movement_beta") ?: return null,
+        gamma = band("movement_gamma") ?: return null,
+    )
+}
+
+private fun Map<String, Any>.floatList(key: String): List<Float> =
+    (this[key] as? List<*>)
+        ?.mapNotNull { (it as? Number)?.toFloat() }
+        .orEmpty()
+
+private fun Any?.asPercent(): String =
+    (this as? Number)?.toDouble()?.let { "%.1f%%".format(it * 100.0) } ?: "—"
+
 @Composable
 private fun FeedbackOptimizationContentV3(
     repository: MockRepository,
@@ -4812,8 +5818,12 @@ private fun FeedbackOptimizationContentV3(
     report: PatientReport,
     gap: Dp,
     onParametersChanged: () -> Unit,
-    showMessage: (String) -> Unit
+    showMessage: (String) -> Unit,
+    realRepository: RealRepository? = null,
+    serverPatientId: String? = null,
+    currentDeviceParameters: com.omnidapt.protocol.StimulationParameters? = null,
 ) {
+    val scope = rememberCoroutineScope()
     val suggestion = remember(patient.id) { repository.getOptimizationSuggestion(patient.id) }
     var alertMode by remember { mutableStateOf("时间轴") }
     var settings by remember(patient.id) { mutableStateOf(repository.getParameterOptimizationSettings(patient.id)) }
@@ -4822,6 +5832,28 @@ private fun FeedbackOptimizationContentV3(
     var pulseWidthUs by remember(patient.id) { mutableStateOf(suggestion.suggestedParameters.pulseWidthUs.toString()) }
     var dutyCycle by remember(patient.id) { mutableStateOf(suggestion.suggestedParameters.dutyCycle.toString()) }
     var confirmed by remember { mutableStateOf(false) }
+    var realTask by remember(serverPatientId) {
+        mutableStateOf<com.omnidapt.pd.real.network.ApiOptimizationTask?>(null)
+    }
+    var optimizationLoading by remember { mutableStateOf(false) }
+
+    LaunchedEffect(realRepository, serverPatientId) {
+        if (realRepository != null && serverPatientId != null) {
+            while (true) {
+                runCatching { realRepository.optimizationTasks(serverPatientId).firstOrNull() }
+                    .onSuccess { task ->
+                        realTask = task
+                        task?.proposals?.lastOrNull { it.status == "submitted" }?.let { proposal ->
+                            currentMa = proposal.parameters["current_ma"]?.toString() ?: currentMa
+                            frequencyHz = proposal.parameters["frequency_hz"]?.toInt()?.toString() ?: frequencyHz
+                            pulseWidthUs = proposal.parameters["pulse_width_us"]?.toInt()?.toString() ?: pulseWidthUs
+                            dutyCycle = proposal.parameters["duty_cycle"]?.toInt()?.toString() ?: dutyCycle
+                        }
+                    }
+                delay(2_000)
+            }
+        }
+    }
 
     DoctorPanel {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -4891,7 +5923,55 @@ private fun FeedbackOptimizationContentV3(
                         filled = true,
                         onClick = {
                             repository.saveParameterOptimizationSettings(patient.id, settings)
-                            showMessage("优化设置已保存")
+                            if (
+                                realRepository != null &&
+                                serverPatientId != null &&
+                                currentDeviceParameters != null
+                            ) {
+                                optimizationLoading = true
+                                scope.launch {
+                                    runCatching {
+                                        realRepository.createOptimizationTask(
+                                            com.omnidapt.pd.real.network.OptimizationTaskBody(
+                                                patient_id = serverPatientId,
+                                                settings = mapOf(
+                                                    "tremor_weight" to settings.tremorWeight,
+                                                    "rigidity_weight" to settings.rigidityWeight,
+                                                    "speech_weight" to settings.speechWeight,
+                                                    "movement_weight" to settings.movementWeight,
+                                                ),
+                                                safety_bounds = mapOf(
+                                                    "current_min_ma" to settings.currentMin.toDouble(),
+                                                    "current_max_ma" to settings.currentMax.toDouble(),
+                                                    "pulse_width_min_us" to settings.pulseWidthMin.toDouble(),
+                                                    "pulse_width_max_us" to settings.pulseWidthMax.toDouble(),
+                                                    "frequency_min_hz" to settings.frequencyMin.toDouble(),
+                                                    "frequency_max_hz" to settings.frequencyMax.toDouble(),
+                                                    "max_delta_current_ma" to 0.2,
+                                                ),
+                                                rounds = settings.optimizationRounds,
+                                                observation_seconds = 30,
+                                                current_parameters = mapOf(
+                                                    "current_ma" to currentDeviceParameters.currentMa.toDouble(),
+                                                    "frequency_hz" to currentDeviceParameters.frequencyHz.toDouble(),
+                                                    "pulse_width_us" to currentDeviceParameters.pulseWidthUs.toDouble(),
+                                                    "duty_cycle" to currentDeviceParameters.dutyCycle.toDouble(),
+                                                    "left_contact" to currentDeviceParameters.leftContact.toDouble(),
+                                                    "right_contact" to currentDeviceParameters.rightContact.toDouble(),
+                                                ),
+                                            ),
+                                        )
+                                    }.onSuccess {
+                                        realTask = it
+                                        showMessage("优化任务已创建，第1轮观察倒计时开始")
+                                    }.onFailure {
+                                        showMessage(it.message ?: "优化任务创建失败")
+                                    }
+                                    optimizationLoading = false
+                                }
+                            } else {
+                                showMessage("优化设置已保存；连接模拟器后可创建真实任务")
+                            }
                         },
                         modifier = Modifier.weight(1f)
                     )
@@ -4927,9 +6007,17 @@ private fun FeedbackOptimizationContentV3(
         val chartCard: @Composable () -> Unit = {
             DoctorPanel(modifier = Modifier.height(360.dp)) {
                 ResourceTitleInline("参数优化可视化", R.drawable.doctor_section_optimization_chart)
-                Text("多轮贝叶斯优化：观测点、拟合曲线、不确定范围与当前最优", color = Color(0xFF8A91A0), fontSize = 11.sp)
+                Text(
+                    realTask?.let {
+                        "真实任务第 ${it.current_round}/${it.rounds} 轮 · ${it.status} · 一维电流 GP + EI"
+                    } ?: "创建真实优化任务后显示观测点、GP曲线和置信区间",
+                    color = Color(0xFF8A91A0),
+                    fontSize = 11.sp,
+                )
                 Spacer(Modifier.height(8.dp))
-                BayesianOptimizationChart(suggestion.curve, Modifier.fillMaxWidth().weight(1f))
+                realTask?.let {
+                    RealBayesianOptimizationChart(it.chart, Modifier.fillMaxWidth().weight(1f))
+                } ?: BayesianOptimizationChart(suggestion.curve, Modifier.fillMaxWidth().weight(1f))
             }
         }
         val confirmCard: @Composable () -> Unit = {
@@ -4949,17 +6037,30 @@ private fun FeedbackOptimizationContentV3(
                 )
                 Spacer(Modifier.weight(1f))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val pendingProposal = realTask?.proposals?.lastOrNull { it.status == "submitted" }
                     OutlinedButton(
                         onClick = {
-                            currentMa = suggestion.suggestedParameters.currentMa.toString()
-                            frequencyHz = suggestion.suggestedParameters.frequencyHz.toString()
-                            pulseWidthUs = suggestion.suggestedParameters.pulseWidthUs.toString()
-                            dutyCycle = suggestion.suggestedParameters.dutyCycle.toString()
+                            if (pendingProposal != null && realRepository != null) {
+                                scope.launch {
+                                    realRepository.reviewProposal(
+                                        pendingProposal.id,
+                                        false,
+                                        "医生拒绝，加入禁用邻域并请求替代建议",
+                                    ).onSuccess {
+                                        showMessage("已拒绝，后台正在生成替代建议")
+                                        serverPatientId?.let { id ->
+                                            realTask = realRepository.optimizationTasks(id).firstOrNull()
+                                        }
+                                    }.onFailure { showMessage(it.message ?: "拒绝失败") }
+                                }
+                            } else {
+                                currentMa = suggestion.suggestedParameters.currentMa.toString()
+                            }
                         },
                         modifier = Modifier.weight(1f).height(44.dp),
                         contentPadding = PaddingValues(horizontal = 5.dp, vertical = 0.dp),
                         shape = RoundedCornerShape(19.dp)
-                    ) { Text("恢复推荐值", fontSize = 11.sp, maxLines = 1) }
+                    ) { Text(if (pendingProposal != null) "拒绝并重算" else "恢复推荐值", fontSize = 11.sp, maxLines = 1) }
                     Button(
                         onClick = {
                             val current = currentMa.toFloatOrNull()
@@ -4975,6 +6076,17 @@ private fun FeedbackOptimizationContentV3(
                                 duty !in settings.dutyCycleMin..settings.dutyCycleMax
                             ) {
                                 showMessage("下发参数超出当前允许范围，请调整后重试")
+                            } else if (pendingProposal != null && realRepository != null) {
+                                scope.launch {
+                                    realRepository.reviewProposal(
+                                        pendingProposal.id,
+                                        true,
+                                        "医生审核通过，限科研模拟器下发",
+                                    ).onSuccess {
+                                        confirmed = true
+                                        showMessage("已批准，等待模拟器ACK")
+                                    }.onFailure { showMessage(it.message ?: "批准下发失败") }
+                                }
                             } else {
                                 repository.confirmParameterDownload(
                                     patient.id,
@@ -5700,6 +6812,87 @@ private fun BayesianOptimizationChart(scores: List<Float>, modifier: Modifier = 
 }
 
 @Composable
+private fun RealBayesianOptimizationChart(
+    chart: com.omnidapt.pd.real.network.ApiOptimizationChart,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier) {
+        Row(Modifier.fillMaxWidth().weight(1f)) {
+            Column(
+                Modifier.width(40.dp).fillMaxHeight().padding(vertical = 10.dp),
+                verticalArrangement = Arrangement.SpaceBetween,
+                horizontalAlignment = Alignment.End,
+            ) {
+                listOf("100", "75", "50", "25", "0").forEach {
+                    Text(it, color = Color(0xFF8A91A0), fontSize = 8.sp)
+                }
+            }
+            Canvas(Modifier.weight(1f).fillMaxHeight().padding(8.dp)) {
+                repeat(5) { index ->
+                    val y = size.height * index / 4f
+                    drawLine(Color(0xFFE8ECF2), Offset(0f, y), Offset(size.width, y), 1f)
+                }
+                val mean = chart.mean
+                val std = chart.std
+                if (mean.size > 1 && mean.size == std.size) {
+                    val band = Path()
+                    mean.indices.forEach { index ->
+                        val x = size.width * index / mean.lastIndex
+                        val y = size.height * (1f - ((mean[index] + 1.96 * std[index]) / 100.0).toFloat().coerceIn(0f, 1f))
+                        if (index == 0) band.moveTo(x, y) else band.lineTo(x, y)
+                    }
+                    mean.indices.reversed().forEach { index ->
+                        val x = size.width * index / mean.lastIndex
+                        val y = size.height * (1f - ((mean[index] - 1.96 * std[index]) / 100.0).toFloat().coerceIn(0f, 1f))
+                        band.lineTo(x, y)
+                    }
+                    band.close()
+                    drawPath(band, BrandBlue.copy(alpha = 0.15f))
+                    val fit = Path()
+                    mean.forEachIndexed { index, value ->
+                        val point = Offset(
+                            size.width * index / mean.lastIndex,
+                            size.height * (1f - (value / 100.0).toFloat().coerceIn(0f, 1f)),
+                        )
+                        if (index == 0) fit.moveTo(point.x, point.y) else fit.lineTo(point.x, point.y)
+                    }
+                    drawPath(fit, BrandBlue, style = Stroke(width = 2.8f))
+                }
+                val grid = chart.grid_current_ma
+                val low = grid.firstOrNull() ?: 1.0
+                val high = grid.lastOrNull() ?: 3.0
+                chart.observations.forEach { observation ->
+                    val x = (((observation.current_ma - low) / (high - low).coerceAtLeast(1e-6)) * size.width).toFloat()
+                    val y = size.height * (1f - (observation.score / 100.0).toFloat().coerceIn(0f, 1f))
+                    drawCircle(Color(0xFFFF8A1C), 5f, Offset(x, y))
+                }
+                chart.next_current_ma?.let { next ->
+                    val x = (((next - low) / (high - low).coerceAtLeast(1e-6)) * size.width).toFloat()
+                    drawLine(MedicalGreen, Offset(x, 0f), Offset(x, size.height), 2f)
+                }
+            }
+        }
+        Row(
+            Modifier.fillMaxWidth().padding(start = 44.dp, end = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            val grid = chart.grid_current_ma
+            val low = grid.firstOrNull() ?: 1.0
+            val high = grid.lastOrNull() ?: 3.0
+            listOf(low, (low + high) / 2.0, high).forEach {
+                Text("%.2f mA".format(it), color = Color(0xFF8A91A0), fontSize = 8.sp)
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            ChartLegendItem(Color(0xFFFF8A1C), "患者观测", dot = true)
+            ChartLegendItem(BrandBlue, "GP均值")
+            ChartLegendItem(BrandBlue.copy(alpha = 0.15f), "95%置信区间", thick = true)
+            ChartLegendItem(MedicalGreen, "下一候选")
+        }
+    }
+}
+
+@Composable
 private fun ChartLegendItem(color: Color, label: String, dot: Boolean = false, thick: Boolean = false) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         if (dot) {
@@ -6034,13 +7227,13 @@ private fun FrequencyExtractionStep(onAdvance: () -> Unit) {
             SectionTitle("β频段提取可视化：", Icons.Filled.BarChart)
             Text("低β对应药效指示器，高β对应运动/发声行为触发器。", color = Color(0xFF717789), fontSize = 12.sp)
             Spacer(Modifier.height(8.dp))
-            BetaBandChart(Modifier.fillMaxSize())
+            BetaBandChart(modifier = Modifier.fillMaxSize())
         }
         DoctorPanel(modifier = Modifier.weight(1f).height(380.dp)) {
             SectionTitle("样本分布可视化：", Icons.Filled.Group)
             Text("将 OFF/ON、静息/运动样本聚类，避免药物状态和运动意图混杂。", color = Color(0xFF717789), fontSize = 12.sp)
             Spacer(Modifier.height(8.dp))
-            SampleDistributionChart(Modifier.fillMaxSize())
+            SampleDistributionChart(modifier = Modifier.fillMaxSize())
         }
     }
     Spacer(Modifier.height(12.dp))
@@ -6048,7 +7241,7 @@ private fun FrequencyExtractionStep(onAdvance: () -> Unit) {
         DoctorPanel(modifier = Modifier.weight(1.25f).height(290.dp)) {
             SectionTitle("γ频段提取可视化：", Icons.AutoMirrored.Filled.ShowChart)
             Spacer(Modifier.height(8.dp))
-            GammaBandChart(Modifier.fillMaxSize())
+            GammaBandChart(modifier = Modifier.fillMaxSize())
         }
         DoctorPanel(modifier = Modifier.weight(1f).height(290.dp)) {
             SectionTitle("频段提取结果：", Icons.Filled.Download)
@@ -6397,32 +7590,100 @@ private fun LfpObservationChart(sampling: Boolean, modifier: Modifier = Modifier
 }
 
 @Composable
-private fun BetaBandChart(modifier: Modifier = Modifier) {
-    DualLineBandChart(
-        orange = listOf(0.2f, 0.6f, 0.8f, 1.02f, 0.88f, 0.9f, 0.65f, 0.32f, 0.1f, 0.02f, 0.01f, 0.05f, 0.06f),
-        blue = listOf(0.02f, 0.01f, 0.02f, 0.04f, 0.08f, 0.07f, 0.1f, 0.08f, 0.12f, 0.18f, 0.22f, 0.4f, 0.28f),
-        modifier = modifier
-    )
+private fun BetaBandChart(
+    medicationFisher: List<Float> = emptyList(),
+    movementFisher: List<Float> = emptyList(),
+    medicationBand: String = "13-20 Hz",
+    movementBand: String = "20.5-35 Hz",
+    modifier: Modifier = Modifier,
+) {
+    val medication = medicationFisher.ifEmpty { listOf(0f, 0f) }
+    val movement = movementFisher.ifEmpty { listOf(0f, 0f) }
+    val maximum = maxOf(medication.maxOrNull() ?: 1f, movement.maxOrNull() ?: 1f, 0.01f)
+    Column(modifier) {
+        Row(Modifier.weight(1f)) {
+            Column(
+                Modifier.width(38.dp).fillMaxHeight(),
+                verticalArrangement = Arrangement.SpaceBetween,
+                horizontalAlignment = Alignment.End,
+            ) {
+                listOf(maximum, maximum / 2f, 0f).forEach {
+                    Text("%.2f".format(it), color = Color(0xFF8A91A0), fontSize = 8.sp)
+                }
+            }
+            DualLineBandChart(
+                medication,
+                movement,
+                medicationBand.toBandFractions(13f, 35f),
+                movementBand.toBandFractions(13f, 35f),
+                Modifier.weight(1f).fillMaxHeight(),
+            )
+        }
+        Row(
+            Modifier.fillMaxWidth().padding(start = 42.dp, end = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            listOf("13", "18", "24", "30", "35 Hz").forEach {
+                Text(it, color = Color(0xFF8A91A0), fontSize = 8.sp)
+            }
+        }
+        Text("Fisher score", color = Color(0xFF8A91A0), fontSize = 8.sp)
+    }
 }
 
 @Composable
-private fun GammaBandChart(modifier: Modifier = Modifier) {
-    SingleBandChart(
-        values = listOf(0.014f, 0.006f, 0.003f, 0.012f, 0.004f, 0.02f, 0.009f, 0.004f, 0.015f, 0.006f, 0.024f, 0.04f, 0.006f),
-        color = Color(0xFF2EAD4B),
-        modifier = modifier
-    )
+private fun GammaBandChart(
+    fisher: List<Float> = emptyList(),
+    selectedBand: String = "75-85 Hz",
+    modifier: Modifier = Modifier,
+) {
+    val values = fisher.ifEmpty { listOf(0f, 0f) }
+    val maximum = (values.maxOrNull() ?: 1f).coerceAtLeast(0.01f)
+    Column(modifier) {
+        Row(Modifier.weight(1f)) {
+            Column(
+                Modifier.width(38.dp).fillMaxHeight(),
+                verticalArrangement = Arrangement.SpaceBetween,
+                horizontalAlignment = Alignment.End,
+            ) {
+                listOf(maximum, maximum / 2f, 0f).forEach {
+                    Text("%.2f".format(it), color = Color(0xFF8A91A0), fontSize = 8.sp)
+                }
+            }
+            SingleBandChart(
+                values = values,
+                color = Color(0xFF2EAD4B),
+                highlight = selectedBand.toBandFractions(60f, 90f),
+                modifier = Modifier.weight(1f).fillMaxHeight(),
+            )
+        }
+        Row(
+            Modifier.fillMaxWidth().padding(start = 42.dp, end = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            listOf("60", "68", "75", "83", "90 Hz").forEach {
+                Text(it, color = Color(0xFF8A91A0), fontSize = 8.sp)
+            }
+        }
+        Text("Fisher score", color = Color(0xFF8A91A0), fontSize = 8.sp)
+    }
 }
 
 @Composable
-private fun DualLineBandChart(orange: List<Float>, blue: List<Float>, modifier: Modifier = Modifier) {
+private fun DualLineBandChart(
+    orange: List<Float>,
+    blue: List<Float>,
+    orangeBand: ClosedFloatingPointRange<Float>,
+    blueBand: ClosedFloatingPointRange<Float>,
+    modifier: Modifier = Modifier,
+) {
     Canvas(modifier) {
         val left = 46f
         val right = size.width - 20f
         val top = 12f
         val bottom = size.height - 34f
-        drawRect(Color(0xFFFFF2E2), Offset(left + (right - left) * 0.05f, top), Size((right - left) * 0.34f, bottom - top))
-        drawRect(Color(0xFFEAF4FF), Offset(left + (right - left) * 0.72f, top), Size((right - left) * 0.22f, bottom - top))
+        drawRect(Color(0xFFFFF2E2), Offset(left + (right - left) * orangeBand.start, top), Size((right - left) * (orangeBand.endInclusive - orangeBand.start), bottom - top))
+        drawRect(Color(0xFFEAF4FF), Offset(left + (right - left) * blueBand.start, top), Size((right - left) * (blueBand.endInclusive - blueBand.start), bottom - top))
         repeat(5) { i ->
             val y = top + (bottom - top) * i / 4f
             drawLine(Color(0xFFE8ECF2), Offset(left, y), Offset(right, y), strokeWidth = 1f)
@@ -6433,13 +7694,18 @@ private fun DualLineBandChart(orange: List<Float>, blue: List<Float>, modifier: 
 }
 
 @Composable
-private fun SingleBandChart(values: List<Float>, color: Color, modifier: Modifier = Modifier) {
+private fun SingleBandChart(
+    values: List<Float>,
+    color: Color,
+    highlight: ClosedFloatingPointRange<Float> = 0.7f..0.88f,
+    modifier: Modifier = Modifier,
+) {
     Canvas(modifier) {
         val left = 46f
         val right = size.width - 20f
         val top = 12f
         val bottom = size.height - 34f
-        drawRect(Color(0xFFEAF7EA), Offset(left + (right - left) * 0.7f, top), Size((right - left) * 0.18f, bottom - top))
+        drawRect(Color(0xFFEAF7EA), Offset(left + (right - left) * highlight.start, top), Size((right - left) * (highlight.endInclusive - highlight.start), bottom - top))
         repeat(5) { i ->
             val y = top + (bottom - top) * i / 4f
             drawLine(Color(0xFFE8ECF2), Offset(left, y), Offset(right, y), strokeWidth = 1f)
@@ -6448,25 +7714,135 @@ private fun SingleBandChart(values: List<Float>, color: Color, modifier: Modifie
     }
 }
 
+private fun String.toBandFractions(low: Float, high: Float): ClosedFloatingPointRange<Float> {
+    val values = replace("Hz", "", ignoreCase = true)
+        .split("-")
+        .mapNotNull { it.trim().toFloatOrNull() }
+    if (values.size != 2 || high <= low) return 0f..1f
+    return ((values[0] - low) / (high - low)).coerceIn(0f, 1f)..
+        ((values[1] - low) / (high - low)).coerceIn(0f, 1f)
+}
+
 @Composable
-private fun SampleDistributionChart(modifier: Modifier = Modifier) {
-    Canvas(modifier) {
-        val center = Offset(size.width * 0.5f, size.height * 0.55f)
-        drawLine(Color(0xFFDDE3EC), Offset(center.x - 115f, center.y + 70f), Offset(center.x + 120f, center.y + 18f), strokeWidth = 2f)
-        drawLine(Color(0xFFDDE3EC), Offset(center.x - 115f, center.y + 70f), Offset(center.x - 30f, center.y - 100f), strokeWidth = 2f)
-        drawLine(Color(0xFFDDE3EC), Offset(center.x - 30f, center.y - 100f), Offset(center.x + 120f, center.y + 18f), strokeWidth = 2f)
-        val colors = listOf(BrandBlue, Color(0xFFFF8A1C), Color(0xFF22B34D), Color(0xFF8A3FFC), Color(0xFF9AA1AD))
-        colors.forEachIndexed { cluster, color ->
-            repeat(42) { i ->
-                val angle = (i * 37 + cluster * 29).toFloat()
-                val radius = 20f + (i % 9) * 4f
-                val offsetX = kotlin.math.sin(angle.toDouble()).toFloat() * radius + (cluster - 2) * 24f
-                val offsetY = kotlin.math.cos(angle.toDouble()).toFloat() * radius * 0.55f + (cluster % 2) * 20f
-                drawCircle(color.copy(alpha = 0.75f), 2.4f, Offset(center.x + offsetX, center.y + offsetY))
+private fun SampleDistributionChart(
+    result: ApiInitialization? = null,
+    modifier: Modifier = Modifier,
+) {
+    val points = remember(result?.id, result?.frequency_results) {
+        val rows = result?.frequency_results?.get("feature_points") as? List<*> ?: emptyList<Any>()
+        rows.mapNotNull { raw ->
+            val row = raw as? Map<*, *> ?: return@mapNotNull null
+            FeaturePoint3D(
+                state = row["state"]?.toString() ?: return@mapNotNull null,
+                x = (row["medication_beta"] as? Number)?.toFloat() ?: return@mapNotNull null,
+                y = (row["movement_beta"] as? Number)?.toFloat() ?: return@mapNotNull null,
+                z = (row["movement_gamma"] as? Number)?.toFloat() ?: return@mapNotNull null,
+            )
+        }
+    }
+    var yaw by remember { mutableStateOf(-0.65f) }
+    var pitch by remember { mutableStateOf(0.45f) }
+    var zoom by remember { mutableStateOf(0.85f) }
+    Column(modifier) {
+        if (points.isEmpty()) {
+            Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                Text("等待真实特征样本", color = Color(0xFF9AA1AD), fontSize = 12.sp)
             }
+            return@Column
+        }
+        Canvas(
+            Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .pointerInput(points.size) {
+                    detectTransformGestures { _, pan, gestureZoom, rotation ->
+                        yaw += rotation * 0.018f + pan.x * 0.006f
+                        pitch = (pitch + pan.y * 0.006f).coerceIn(-1.2f, 1.2f)
+                        zoom = (zoom * gestureZoom).coerceIn(0.55f, 1.6f)
+                    }
+                },
+        ) {
+            val minX = points.minOf { it.x }
+            val maxX = points.maxOf { it.x }
+            val minY = points.minOf { it.y }
+            val maxY = points.maxOf { it.y }
+            val minZ = points.minOf { it.z }
+            val maxZ = points.maxOf { it.z }
+            fun normalize(value: Float, low: Float, high: Float) =
+                if (high - low < 1e-6f) 0f else ((value - low) / (high - low)) * 2f - 1f
+            fun project(x: Float, y: Float, z: Float): Triple<Offset, Float, Float> {
+                val cy = kotlin.math.cos(yaw)
+                val sy = kotlin.math.sin(yaw)
+                val cp = kotlin.math.cos(pitch)
+                val sp = kotlin.math.sin(pitch)
+                val rotatedX = x * cy - y * sy
+                val rotatedY = (x * sy + y * cy) * cp - z * sp
+                val depth = (x * sy + y * cy) * sp + z * cp
+                val scale = minOf(size.width, size.height) * 0.34f * zoom
+                return Triple(
+                    Offset(size.width * 0.5f + rotatedX * scale, size.height * 0.53f - rotatedY * scale),
+                    depth,
+                    scale,
+                )
+            }
+            val origin = project(-1f, -1f, -1f).first
+            val axes = listOf(
+                Triple(project(1f, -1f, -1f).first, Color(0xFFFF8A1C), "药物β"),
+                Triple(project(-1f, 1f, -1f).first, BrandBlue, "运动β"),
+                Triple(project(-1f, -1f, 1f).first, Color(0xFF22B34D), "运动γ"),
+            )
+            val paint = android.graphics.Paint().apply {
+                textSize = 22f
+                isAntiAlias = true
+            }
+            axes.forEach { (end, color, label) ->
+                drawLine(color, origin, end, strokeWidth = 2.2f)
+                paint.color = color.toArgb()
+                drawContext.canvas.nativeCanvas.drawText(label, end.x + 4f, end.y, paint)
+            }
+            val stateColors = mapOf(
+                "OFF-Rest" to BrandBlue,
+                "OFF-Move" to Color(0xFFFF8A1C),
+                "ON-Rest" to Color(0xFF22B34D),
+                "ON-Move" to Color(0xFF8A3FFC),
+            )
+            points.map { point ->
+                val projected = project(
+                    normalize(point.x, minX, maxX),
+                    normalize(point.y, minY, maxY),
+                    normalize(point.z, minZ, maxZ),
+                )
+                Triple(point, projected.first, projected.second)
+            }.sortedBy { it.third }.forEach { (point, offset, depth) ->
+                drawCircle(
+                    (stateColors[point.state] ?: Color.Gray).copy(alpha = 0.72f),
+                    radius = (3.2f + (depth + 1f) * 0.8f).coerceAtLeast(2f),
+                    center = offset,
+                )
+            }
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            listOf(
+                "OFF-Rest" to BrandBlue,
+                "OFF-Move" to Color(0xFFFF8A1C),
+                "ON-Rest" to Color(0xFF22B34D),
+                "ON-Move" to Color(0xFF8A3FFC),
+            ).forEach { (label, color) -> ChartLegendItem(color, label, dot = true) }
+            TextButton(onClick = {
+                yaw = -0.65f
+                pitch = 0.45f
+                zoom = 0.85f
+            }) { Text("复位视角", fontSize = 9.sp) }
         }
     }
 }
+
+private data class FeaturePoint3D(
+    val state: String,
+    val x: Float,
+    val y: Float,
+    val z: Float,
+)
 
 @Composable
 private fun FrequencyResultRow(
@@ -6530,9 +7906,22 @@ private fun TabletRealtimePage(
     patient: Patient,
     compact: Boolean,
     gap: Dp,
-    showMessage: (String) -> Unit
+    showMessage: (String) -> Unit,
+    realRepository: RealRepository? = null,
+    bleClient: BleCentralClient? = null,
+    edgeInference: EdgeInferenceController? = null,
+    commandDispatcher: DeviceCommandDispatcher? = null,
+    serverPatientId: String? = null,
 ) {
     var tick by remember { mutableIntStateOf(0) }
+    val bleSnapshot = bleClient?.snapshot?.collectAsState()?.value
+    val liveSamples = bleClient?.recentSamples?.collectAsState()?.value ?: ShortArray(0)
+    val inferenceSnapshot = edgeInference?.snapshot?.collectAsState()?.value
+    val dispatchSnapshot = commandDispatcher?.snapshot?.collectAsState()?.value
+    val medicationProbabilityHistory =
+        remember(patient.id) { mutableStateListOf<Pair<Float?, Float?>>() }
+    val movementProbabilityHistory =
+        remember(patient.id) { mutableStateListOf<Pair<Float?, Float?>>() }
     var monitorState by remember(patient.id) { mutableStateOf(repository.getRealtimeMonitorState(patient.id)) }
     var displayDialog by remember { mutableStateOf(false) }
     var eventDialog by remember { mutableStateOf(false) }
@@ -6585,7 +7974,52 @@ private fun TabletRealtimePage(
             if (!monitorState.paused) tick++
         }
     }
-    val signals = remember(tick, monitorState.paused) { repository.observeRealtimeSignals(patient.id, tick) }
+    LaunchedEffect(
+        inferenceSnapshot?.fastProbabilities,
+        inferenceSnapshot?.stableProbabilities,
+    ) {
+        val fast = inferenceSnapshot?.fastProbabilities.orEmpty()
+        val stable = inferenceSnapshot?.stableProbabilities.orEmpty()
+        if (fast.isNotEmpty() && stable.isNotEmpty()) {
+            val fastMedication = fast
+                .filterKeys { it.startsWith("ON") }
+                .values.sum().toFloat()
+            val fastMovement = fast
+                .filterKeys { it.endsWith("Move") }
+                .values.sum().toFloat()
+            val stableMedication = stable
+                .filterKeys { it.startsWith("ON") }
+                .values.sum().toFloat()
+            val stableMovement = stable
+                .filterKeys { it.endsWith("Move") }
+                .values.sum().toFloat()
+            medicationProbabilityHistory +=
+                (fastMedication.takeUnless { inferenceSnapshot?.fastRejected == true } to
+                    stableMedication.takeUnless { inferenceSnapshot?.stableRejected == true })
+            movementProbabilityHistory +=
+                (fastMovement.takeUnless { inferenceSnapshot?.fastRejected == true } to
+                    stableMovement.takeUnless { inferenceSnapshot?.stableRejected == true })
+            while (medicationProbabilityHistory.size > 120) {
+                medicationProbabilityHistory.removeAt(0)
+            }
+            while (movementProbabilityHistory.size > 120) {
+                movementProbabilityHistory.removeAt(0)
+            }
+        }
+    }
+    val signals = remember(tick, monitorState.paused) {
+        repository.observeRealtimeSignals(patient.id, tick)
+    }
+    val channelOne = if (liveSamples.size >= 4) {
+        liveSamples.asSequence().filterIndexed { index, _ -> index % 2 == 0 }.map { it.toFloat() }.toList()
+    } else {
+        signals.map { it.microVolt }
+    }
+    val channelTwo = if (liveSamples.size >= 4) {
+        liveSamples.asSequence().filterIndexed { index, _ -> index % 2 == 1 }.map { it.toFloat() }.toList()
+    } else {
+        signals.map { -it.microVolt * 0.82f }
+    }
     TabletPageTitle("实时观测")
     DoctorPanel {
         BoxWithConstraints {
@@ -6595,6 +8029,13 @@ private fun TabletRealtimePage(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     OutlinedButton(onClick = { displayDialog = true }, modifier = Modifier.height(34.dp)) { Text("显示设置", fontSize = 12.sp) }
+                    if (bleClient != null && bleSnapshot?.linkState == BleLinkState.IDLE) {
+                        Button(
+                            onClick = bleClient::connect,
+                            modifier = Modifier.height(34.dp),
+                            shape = RoundedCornerShape(17.dp),
+                        ) { Text("连接模拟器", fontSize = 12.sp) }
+                    }
                     OutlinedButton(
                         onClick = {
                             monitorState = repository.setRealtimePaused(patient.id, !monitorState.paused)
@@ -6619,13 +8060,75 @@ private fun TabletRealtimePage(
                 }
             } else {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("监测状态：${if (monitorState.paused) "已暂停" else "监测中"}", color = Color(0xFF3D3D3D), fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        "监测状态：${
+                            when {
+                                monitorState.paused -> "已暂停"
+                                bleSnapshot?.verifiedSimulator == true -> "设备在线"
+                                bleSnapshot?.linkState == BleLinkState.SCANNING -> "正在扫描"
+                                else -> "未连接"
+                            }
+                        }",
+                        color = Color(0xFF3D3D3D),
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
                     Spacer(Modifier.width(12.dp))
                     Text("显示：${monitorState.displayMode}", color = Color(0xFF717789), fontSize = 13.sp)
                     Spacer(Modifier.weight(1f))
                     controls()
                 }
             }
+        }
+        bleSnapshot?.let { snapshot ->
+            Spacer(Modifier.height(10.dp))
+            HorizontalDivider(color = Color(0xFFE8ECF2))
+            Spacer(Modifier.height(10.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(18.dp),
+            ) {
+                RealtimeDeviceMetric("设备", snapshot.deviceInfo?.serialNumber ?: "等待连接")
+                RealtimeDeviceMetric("固件 / 协议", "${snapshot.deviceInfo?.firmwareVersion ?: "—"} / v${snapshot.deviceInfo?.protocolVersion ?: "—"}")
+                RealtimeDeviceMetric("电量", snapshot.batteryPercent?.let { "$it%" } ?: "—")
+                RealtimeDeviceMetric("链路", "MTU ${snapshot.negotiatedMtu} · 帧 ${snapshot.receivedFrames}")
+                RealtimeDeviceMetric("质量", "丢包 ${snapshot.lostFrames} · CRC ${snapshot.crcErrors}")
+                RealtimeDeviceMetric(
+                    "阻抗",
+                    snapshot.impedance?.readings?.joinToString(" / ") { "%.2fkΩ".format(it.kiloOhms) } ?: "—",
+                )
+                RealtimeDeviceMetric(
+                    "当前刺激",
+                    snapshot.parameters?.let { "%.2fmA · %dHz · %dμs".format(it.currentMa, it.frequencyHz, it.pulseWidthUs) } ?: "—",
+                )
+            }
+            snapshot.lastError?.let {
+                Text(it, color = SoftRed, fontSize = 11.sp)
+            }
+        }
+        inferenceSnapshot?.topState?.let { topState ->
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "模拟场景 ${bleSnapshot?.simulatedState?.label ?: "—"}（仅用于生成LFP，不参与概率计算）",
+                color = MedicalGreen,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+            )
+            Text(
+                "端侧推断 $topState · 置信度 ${"%.1f".format((inferenceSnapshot.confidence ?: 0.0) * 100)}% · " +
+                    "模型 ${inferenceSnapshot.modelVersionId ?: "内置预热模型"}",
+                color = BrandBlue,
+                fontSize = 11.sp,
+            )
+        }
+        dispatchSnapshot?.let {
+            Text(
+                "参数闭环：${it.status} · 成功 ${it.successfulAcks} / 失败 ${it.failedAcks}",
+                color = Color(0xFF717789),
+                fontSize = 10.sp,
+            )
         }
         if (monitorState.eventMarkers.isNotEmpty()) {
             Spacer(Modifier.height(8.dp))
@@ -6634,13 +8137,166 @@ private fun TabletRealtimePage(
     }
     Spacer(Modifier.height(gap))
     if (monitorState.displayMode != "概率曲线") {
-        RealtimeChartPanel("脑电波形", signals.map { it.microVolt }, BrandBlue, -50f, 50f)
+        RealtimeChartPanel("左侧 LFP（C6-C2）", channelOne, BrandBlue, -120f, 120f)
+        Spacer(Modifier.height(gap))
+        RealtimeChartPanel("右侧 LFP（C7-C3）", channelTwo, Color(0xFFFF8A1C), -120f, 120f)
+        Spacer(Modifier.height(gap))
+        RealtimeSpectrumPanel(liveSamples)
         Spacer(Modifier.height(gap))
     }
     if (monitorState.displayMode != "仅脑电波形") {
-        RealtimeChartPanel("药物效果", signals.map { it.staticProbability }, Color(0xFF08A522), 0f, 1f)
+        RealtimeProbabilityPanel(
+            title = "药物效果",
+            fastValues = medicationProbabilityHistory.map { it.first },
+            stableValues = medicationProbabilityHistory.map { it.second },
+            accentColor = Color(0xFF08A522),
+            warmup = "${inferenceSnapshot?.fastWarmedWindows ?: 0}/5 · ${inferenceSnapshot?.stableWarmedWindows ?: 0}/30",
+        )
         Spacer(Modifier.height(gap))
-        RealtimeChartPanel("运动强度", signals.map { it.motionProbability + 0.18f }, Color(0xFF7A26FF), 0f, 1f)
+        RealtimeProbabilityPanel(
+            title = "运动强度",
+            fastValues = movementProbabilityHistory.map { it.first },
+            stableValues = movementProbabilityHistory.map { it.second },
+            accentColor = Color(0xFF7A26FF),
+            warmup = "${inferenceSnapshot?.fastWarmedWindows ?: 0}/5 · ${inferenceSnapshot?.stableWarmedWindows ?: 0}/30",
+        )
+    }
+}
+
+@Composable
+private fun RealtimeDeviceMetric(label: String, value: String) {
+    Column {
+        Text(label, color = Color(0xFF8A91A0), fontSize = 9.sp)
+        Text(value, color = Color(0xFF3D3D3D), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+@Composable
+private fun RealtimeSpectrumPanel(interleaved: ShortArray) {
+    val spectrum = remember(interleaved) { calculateLfpSpectrum(interleaved) }
+    DoctorPanel {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("LFP 功率谱", color = Color(0xFF3D3D3D), fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.weight(1f))
+            Text(
+                if (interleaved.size >= 512) "256 Hz · 最近1秒 · 2–100 Hz" else "等待完整1秒数据",
+                color = Color(0xFF9AA1AD),
+                fontSize = 12.sp,
+            )
+        }
+        Spacer(Modifier.height(12.dp))
+        SingleBandChart(
+            values = spectrum.ifEmpty { listOf(0f, 0f) },
+            color = Color(0xFF2EAD4B),
+            modifier = Modifier.fillMaxWidth().height(160.dp),
+        )
+        Row(
+            Modifier.fillMaxWidth().padding(start = 46.dp, end = 20.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            listOf("2", "20", "40", "60", "80", "100 Hz").forEach {
+                Text(it, color = Color(0xFF9AA1AD), fontSize = 9.sp)
+            }
+        }
+    }
+}
+
+private fun calculateLfpSpectrum(interleaved: ShortArray): List<Float> {
+    val sampleCount = minOf(interleaved.size / 2, 256)
+    if (sampleCount < 256) return emptyList()
+    val startSample = interleaved.size / 2 - sampleCount
+    return (2..100 step 2).map { frequency ->
+        var real = 0.0
+        var imaginary = 0.0
+        for (index in 0 until sampleCount) {
+            val sample = interleaved[(startSample + index) * 2].toDouble()
+            val window = 0.5 - 0.5 * kotlin.math.cos(2.0 * Math.PI * index / (sampleCount - 1))
+            val angle = 2.0 * Math.PI * frequency * index / 256.0
+            real += sample * window * kotlin.math.cos(angle)
+            imaginary -= sample * window * kotlin.math.sin(angle)
+        }
+        ((real * real + imaginary * imaginary) / (sampleCount * sampleCount)).toFloat()
+    }
+}
+
+@Composable
+private fun RealtimeProbabilityPanel(
+    title: String,
+    fastValues: List<Float?>,
+    stableValues: List<Float?>,
+    accentColor: Color,
+    warmup: String,
+) {
+    DoctorPanel {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(title, color = Color(0xFF3D3D3D), fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.weight(1f))
+            Box(Modifier.size(8.dp).clip(CircleShape).background(accentColor))
+            Spacer(Modifier.width(5.dp))
+            Text(
+                "快速 ${fastValues.lastOrNull()?.let { "%.0f%%".format(it * 100) } ?: "预热/拒识"}",
+                color = Color(0xFF5F687B),
+                fontSize = 11.sp,
+            )
+            Spacer(Modifier.width(14.dp))
+            Box(Modifier.size(8.dp).clip(CircleShape).background(BrandBlue.copy(alpha = 0.75f)))
+            Spacer(Modifier.width(5.dp))
+            Text(
+                "稳态 ${stableValues.lastOrNull()?.let { "%.0f%%".format(it * 100) } ?: "预热/拒识"} · $warmup",
+                color = Color(0xFF5F687B),
+                fontSize = 11.sp,
+            )
+        }
+        Spacer(Modifier.height(10.dp))
+        Row(Modifier.fillMaxWidth().height(190.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(
+                Modifier.width(48.dp).fillMaxHeight(),
+                verticalArrangement = Arrangement.SpaceBetween,
+                horizontalAlignment = Alignment.End,
+            ) {
+                Text("100%", color = Color(0xFF9AA1AD), fontSize = 9.sp)
+                Text("50%", color = Color(0xFF9AA1AD), fontSize = 9.sp)
+                Text("0%", color = Color(0xFF9AA1AD), fontSize = 9.sp)
+            }
+            Spacer(Modifier.width(7.dp))
+            Canvas(Modifier.weight(1f).fillMaxHeight()) {
+                val left = 0f
+                val right = size.width
+                val top = 4f
+                val bottom = size.height - 5f
+                repeat(5) { index ->
+                    val y = top + (bottom - top) * index / 4f
+                    drawLine(Color(0xFFE8ECF2), Offset(left, y), Offset(right, y), strokeWidth = 1f)
+                }
+                fun drawNullable(values: List<Float?>, color: Color, width: Float) {
+                    if (values.size < 2) return
+                    val step = (right - left) / (values.size - 1).coerceAtLeast(1)
+                    var previous: Offset? = null
+                    values.forEachIndexed { index, value ->
+                        if (value == null) {
+                            previous = null
+                        } else {
+                            val point = Offset(
+                                left + index * step,
+                                bottom - value.coerceIn(0f, 1f) * (bottom - top),
+                            )
+                            previous?.let { drawLine(color, it, point, strokeWidth = width) }
+                            previous = point
+                        }
+                    }
+                }
+                drawNullable(stableValues, BrandBlue.copy(alpha = 0.70f), 2.2f)
+                drawNullable(fastValues, accentColor, 3.2f)
+            }
+        }
+        Row(
+            Modifier.fillMaxWidth().padding(start = 55.dp, top = 3.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            listOf("-120s", "-100", "-80", "-60", "-40", "-20", "现在").forEach {
+                Text(it, color = Color(0xFF9AA1AD), fontSize = 9.sp)
+            }
+        }
     }
 }
 
@@ -6650,7 +8306,15 @@ private fun RealtimeChartPanel(title: String, values: List<Float>, color: Color,
         Row {
             Text(title, color = Color(0xFF3D3D3D), fontSize = 18.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.weight(1f))
-            Text("已记录时间：36s", color = Color(0xFF9AA1AD), fontSize = 12.sp)
+            Text(
+                when {
+                    min < 0f -> "实时缓冲 ${values.size} 点"
+                    title.contains("模拟器真值") -> "电脑模拟器实时控制值"
+                    else -> "端侧模型概率"
+                },
+                color = Color(0xFF9AA1AD),
+                fontSize = 12.sp,
+            )
         }
         Spacer(Modifier.height(12.dp))
         AxisLineChart(

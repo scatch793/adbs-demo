@@ -1,5 +1,6 @@
 *.iml
 .gradle
+.gradle-user-home/
 .kotlin/
 /local.properties
 /.idea/caches
@@ -23,3 +24,17 @@ local.properties
 node_modules/
 unpackage/
 .hbuilderx/
+.venv/
+backend/.venv/
+backend/.pytest_cache/
+backend/.coverage
+backend/data/
+private_data/
+*.db
+*.sqlite3
+__pycache__/
+*.py[cod]
+*.egg-info/
+.env
+/tools/ble_pc/dist/
+/tools/ble_pc/*.spec

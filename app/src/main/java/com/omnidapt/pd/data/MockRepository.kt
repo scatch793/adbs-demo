@@ -283,6 +283,28 @@ class MockRepository {
         return if (ascending) sorted else sorted.reversed()
     }
 
+    /**
+     * Keeps the established presentation model while allowing the production
+     * repository to provide the authorized patient directory.
+     */
+    fun replaceDoctorPatients(records: List<DoctorPatientRecord>) {
+        doctorPatients.clear()
+        doctorPatients.addAll(records)
+        records.forEach { record ->
+            initializationWorkflows.putIfAbsent(
+                record.id,
+                InitializationWorkflowState(
+                    step = if (record.group == PatientListGroup.PendingInitialization) {
+                        InitializationStep.ElectrodeConfig
+                    } else {
+                        InitializationStep.Completed
+                    },
+                ),
+            )
+            realtimeStates.putIfAbsent(record.id, RealtimeMonitorState())
+        }
+    }
+
     fun addDoctorPatient(record: DoctorPatientRecord): Boolean {
         if (doctorPatients.any { it.number == record.number || it.id == record.id }) return false
         doctorPatients.add(record)

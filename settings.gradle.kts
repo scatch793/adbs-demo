@@ -24,3 +24,5 @@ dependencyResolutionManagement {
 
 rootProject.name = "OminidaptPD"
 include(":app")
+include(":protocol")
+include(":simulator")
